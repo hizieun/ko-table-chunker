@@ -22,7 +22,7 @@ import numpy as np
 from bs4 import BeautifulSoup
 
 from html_chunker import (BACKEND, FIXTURE, Chunk, build_table, clean, invariants,
-                          parse, row_kv, to_markdown)
+                          is_prose_row, parse, row_kv, to_markdown)
 
 # --------------------------------------------------------------------------- #
 # 임베더 (교체 가능. 평가 중에는 절대 바꾸지 말 것)
@@ -137,10 +137,15 @@ def gen_queries(html: str, per_table: int = 6, seed: int = 0) -> list[Query]:
             continue
         cands = []
         for row in t.body:
-            key_i = next((i for i, c in enumerate(row) if c.text), None)
+            if is_prose_row(row):
+                continue        # 표 안의 안내문 행. 질문거리가 아니다
+            # colspan 으로 복제된 칸은 제외 — row_kv 가 원본 컬럼에만 값을 내므로
+            # 복제된 칸을 정답으로 잡으면 도달 불가능한 gold 가 된다 (없는 결함 보고)
+            own = [i for i, c in enumerate(row) if c.text and c.origin[1] == i]
+            key_i = own[0] if own else None
             if key_i is None:
                 continue
-            tgt = [i for i, c in enumerate(row) if c.text and i != key_i and t.labels[i]]
+            tgt = [i for i in own if i != key_i and t.labels[i]]
             if not tgt:
                 continue
             i = rng.choice(tgt)

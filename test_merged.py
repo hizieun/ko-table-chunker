@@ -164,6 +164,60 @@ def test_병합셀이_청크경계를_넘어감():
     assert "부문: 반도체" in chunks[-1].text
 
 
+def test_th없는_다단헤더():
+    """Word/한글 내보내기는 <th> 를 전혀 쓰지 않는다. 그래도 2단 헤더를 찾아야 한다.
+    못 찾으면 개인/법인 구분이 사라져 두 값이 같은 라벨을 달게 된다."""
+    t = T("""<table>
+      <tr><td rowspan="2" colspan="2">구 분</td><td colspan="2">가온클라우드</td>
+          <td colspan="2">한빛호스팅</td></tr>
+      <tr><td>개인</td><td>법인</td><td>개인</td><td>법인</td></tr>
+      <tr><td rowspan="2">표준</td><td>이용료</td><td>연간 3,300원</td>
+          <td>연간 88,000원</td><td>연간 3,300원</td><td>연간 92,400원</td></tr>
+      <tr><td>이용범위</td><td colspan="2">전 제휴 서비스</td>
+          <td colspan="2">전 제휴 기관</td></tr>
+    </table>""")
+    assert t.n_header == 2, f"헤더 {t.n_header}행 — <th> 없는 다단 헤더를 놓쳤다"
+    assert t.labels[2:] == ["가온클라우드 > 개인", "가온클라우드 > 법인",
+                            "한빛호스팅 > 개인", "한빛호스팅 > 법인"], t.labels
+    # 88,000원 이 '가온클라우드 법인' 으로 정확히 붙어야 한다
+    kv = row_kv(t.labels, t.body[0])
+    assert "가온클라우드 > 법인: 연간 88,000원" in kv, kv
+    assert "한빛호스팅 > 법인: 연간 92,400원" in kv, kv
+
+
+def test_숫자있는_헤더는_한행으로_떨어진다():
+    """헤더에 연도가 들어가면 휴리스틱이 0행을 잡아 1행으로 폴백한다.
+    종전 동작과 같으므로 회귀가 아니다 — 이 한계를 명시적으로 고정해 둔다."""
+    t = T("""<table>
+      <tr><td>부처</td><td>2024년</td><td>2025년</td></tr>
+      <tr><td>과기정통부</td><td>7,420</td><td>9,540</td></tr>
+    </table>""")
+    assert t.n_header == 1
+    assert t.labels == ["부처", "2024년", "2025년"]
+
+
+def test_표안의_안내문행():
+    """표 전체 폭을 덮는 긴 행은 데이터가 아니라 본문이다.
+    표 행으로 두면 '구분: ※ 안내...' 같은 쓰레기 KV 가 나온다."""
+    from html_chunker import is_prose_row
+    note = ("※ 요금제 전환을 원하는 경우 관리화면에서 처리구분을 등록한 뒤 "
+            "30분 후 재발급 처리하시기 바랍니다. 단, 기존 이용권은 반드시 폐지해야 합니다.")
+    html = f"""<table>
+      <tr><td>구분</td><td>개인</td><td>법인</td></tr>
+      <tr><td>표준</td><td>3,300원</td><td>88,000원</td></tr>
+      <tr><td colspan="3">{note}</td></tr>
+    </table>"""
+    t = T(html)
+    assert is_prose_row(t.body[-1]) and not is_prose_row(t.body[0])
+
+    chunks = parse(html)
+    tbl = [c for c in chunks if c.kind == "table"]
+    txt = [c for c in chunks if c.kind == "text"]
+    assert any(note[:20] in c.text for c in txt), "안내문이 본문 청크로 안 빠졌다"
+    assert not any(note[:20] in c.text for c in tbl), "안내문이 아직 표 행에 남아있다"
+    assert any("구분: 표준" in c.text for c in tbl), "정상 데이터 행까지 사라졌다"
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in tests:

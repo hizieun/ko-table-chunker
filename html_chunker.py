@@ -130,16 +130,34 @@ def _int(v, default: int) -> int:
         return default
 
 
+_DIGIT = re.compile(r"\d")
+
+
 def _header_rows(grid: list[list[Cell]]) -> int:
-    n = 0
-    for row in grid:
-        if row and all(c.header for c in row):
-            n += 1
-        else:
-            break
-    if n == 0:
-        n = 1  # ponytail: OCR 산출물은 <th> 를 거의 안 쓴다. 0행을 헤더로 가정.
-    return min(n, max(0, len(grid) - 1))
+    """헤더로 쓸 선행 행 수.
+
+    <th> 가 있으면 그걸 믿는다. 없으면 '숫자가 없는 선행 행' 을 헤더로 본다 —
+    Word/한글 내보내기와 OCR 산출물은 <th> 를 전혀 쓰지 않아 태그로는 다단 헤더를
+    찾을 수 없고, 헤더 행은 값(금액·연도·수량)을 담지 않는다는 성질을 이용한다.
+
+    ponytail: 헤더에 연도가 들어간 th 없는 표('구분|2024년|2025년')는 1행으로 떨어진다
+    (= 종전 동작, 회귀 아님). 다단 헤더까지 필요해지면 배경색/굵기 신호를 추가할 것.
+    """
+    if any(c.header for row in grid for c in row):
+        n = 0
+        for row in grid:
+            if row and all(c.header for c in row):
+                n += 1
+            else:
+                break
+    else:
+        n = 0
+        for row in grid[:3]:                      # 4단 이상 헤더는 실물에 거의 없다
+            if row and not any(_DIGIT.search(c.text) for c in row):
+                n += 1
+            else:
+                break
+    return min(max(n, 1), max(0, len(grid) - 1))
 
 
 def _labels(grid, n_header: int, n_cols: int) -> list[str]:
@@ -288,6 +306,19 @@ def _pack_text(text: str, max_chars: int) -> list[str]:
     return out
 
 
+def is_prose_row(row: list[Cell], min_chars: int = 60) -> bool:
+    """표 전체 폭을 한 셀이 덮고 내용이 긴 행 = 데이터가 아니라 본문 안내문.
+
+    한국어 실무 문서(Word/한글 내보내기)에서 매우 흔하다 — 표 맨 아래에 ※ 주석이나
+    처리 안내를 한 칸짜리 행으로 붙인다. 이걸 데이터 행으로 다루면
+    '구분: ※ 요금제 선택을...' 같은 쓰레기 KV 가 나온다.
+    """
+    if len(row) < 2:
+        return False
+    origins = {c.origin for c in row}
+    return len(origins) == 1 and origins != {(-1, -1)} and len(row[0].text) >= min_chars
+
+
 def _pack_table(t: Table, tid: int, heading: str, max_chars: int) -> list[Chunk]:
     """행 원자적 청킹: 헤더 문맥을 매 청크에 반복하고 행은 절대 쪼개지 않는다."""
     if not t.body:
@@ -313,6 +344,18 @@ def _pack_table(t: Table, tid: int, heading: str, max_chars: int) -> list[Chunk]
 
     used = 0
     for i, row in enumerate(t.body):
+        if is_prose_row(row):
+            # 표를 여기서 끊고 안내문은 본문 청크로 따로 낸다
+            if cur:
+                emit(i)
+                cur, used = [], 0
+            txt = row[0].text
+            for piece in _pack_text(txt, max_chars):
+                body = f"{prefix}\n{piece}" if title else piece
+                out.append(Chunk(text=body, context=body, kind="text",
+                                 heading=heading, table_id=tid, row_span=(i, i + 1)))
+            start = i + 1
+            continue
         line = row_kv(t.labels, row)
         if not line:
             continue
@@ -357,6 +400,8 @@ def invariants(html: str, chunks: list[Chunk] | None = None, **kw) -> dict:
     for tid, t in enumerate(tables):
         owned = [c for c in chunks if c.table_id == tid]
         for r in t.body:
+            if is_prose_row(r):          # 본문 청크로 빠진 행. KV 로 존재하지 않는 게 정상
+                continue
             kv = row_kv(t.labels, r)
             if kv and not any(kv in c.text for c in owned):
                 atomic = False
