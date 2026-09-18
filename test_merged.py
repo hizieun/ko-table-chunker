@@ -218,6 +218,69 @@ def test_표안의_안내문행():
     assert any("구분: 표준" in c.text for c in tbl), "정상 데이터 행까지 사라졌다"
 
 
+def test_교차표_판정():
+    """행축·열축이 둘 다 계층이면 교차표. 행이 레코드인 목록과 구분해야 한다."""
+    from html_chunker import header_cols, is_crosstab, is_value
+    # 값 판정: 각주 '주1)' 이나 화면번호 '#0206' 이 값으로 잡히면 안 된다
+    assert is_value("12,450") and is_value("연간 55,000원") and is_value("-8.1%")
+    assert not is_value("시스템LSI 주1)") and not is_value("메모리") and not is_value("-")
+
+    cross = T("""<table>
+      <tr><td rowspan="2" colspan="2">구 분</td><td colspan="2">가온클라우드</td></tr>
+      <tr><td>개인</td><td>법인</td></tr>
+      <tr><td rowspan="2">표준</td><td>이용료</td><td>3,300원</td><td>88,000원</td></tr>
+      <tr><td>이용범위</td><td>전 제휴</td><td>전 제휴</td></tr>
+    </table>""")
+    assert header_cols(cross) == 2 and is_crosstab(cross)
+
+    # 행 = 레코드인 일반 목록. 좌측이 3열이어도 열 헤더가 1단이면 교차표가 아니다
+    flat = T("""<table>
+      <tr><td>회사명</td><td>소재지</td><td>주요사업</td><td>자산총액</td></tr>
+      <tr><td>가온반도체</td><td>경기 화성</td><td>반도체 제조</td><td>2,840,000</td></tr>
+    </table>""")
+    assert header_cols(flat) == 3 and not is_crosstab(flat)
+
+
+def test_교차표는_셀단위로_쪼갠다():
+    """사용자 실패 케이스: '전용 이용료 법인' 을 물으면 55,000 이 나와야 하는데
+    행 단위 KV 는 한 줄에 4개 값이 뭉쳐 3,300 을 답한다."""
+    html = """<table>
+      <tr><td rowspan="2" colspan="2">구 분</td><td colspan="2">가온클라우드</td>
+          <td colspan="2">한빛호스팅</td></tr>
+      <tr><td>개인</td><td>법인</td><td>개인</td><td>법인</td></tr>
+      <tr><td rowspan="2">표준</td><td>이용료</td><td>연간 3,300원</td>
+          <td>연간 88,000원</td><td>연간 3,300원</td><td>연간 92,400원</td></tr>
+      <tr><td>이용범위</td><td colspan="2">전 제휴</td><td colspan="2">전 기관</td></tr>
+      <tr><td rowspan="2">전용</td><td>이용료</td><td>-</td>
+          <td>연간 55,000원</td><td>-</td><td>연간 3,300원</td></tr>
+      <tr><td>이용범위</td><td colspan="2">전 계열사</td><td colspan="2">전 은행</td></tr>
+    </table>"""
+    lines = [l for c in parse(html) if c.kind == "table"
+             for l in c.text.splitlines() if ":" in l and not l.startswith("컬럼")]
+
+    hit = [l for l in lines if "55,000" in l]
+    assert len(hit) == 1, hit
+    line = hit[0]
+    # 정답 줄이 자기완결적이어야 한다: 행축·열축이 모두 들어있고
+    assert "전용" in line and "이용료" in line
+    assert "가온클라우드 > 법인" in line, line
+    # 혼동값이 같은 줄에 없어야 한다 — 이게 3,300 오답의 원인이었다
+    assert "3,300" not in line, line
+    assert "88,000" not in line and "92,400" not in line, line
+
+
+def test_일반표는_행단위를_유지한다():
+    """교차표가 아닌 표까지 셀로 쪼개면 청크만 늘고 얻는 게 없다."""
+    html = """<table>
+      <tr><th>회사명</th><th>소재지</th><th>자산총액</th><th>당기순손익</th></tr>
+      <tr><td>가온반도체</td><td>경기 화성</td><td>2,840,000</td><td>184,000</td></tr>
+    </table>"""
+    lines = [l for c in parse(html) if c.kind == "table"
+             for l in c.text.splitlines() if l.startswith("회사명:")]
+    assert len(lines) == 1, lines
+    assert "자산총액: 2,840,000" in lines[0] and "당기순손익: 184,000" in lines[0]
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in tests:

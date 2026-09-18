@@ -22,7 +22,8 @@ import numpy as np
 from bs4 import BeautifulSoup
 
 from html_chunker import (BACKEND, FIXTURE, Chunk, build_table, clean, invariants,
-                          is_prose_row, parse, row_kv, to_markdown)
+                          header_cols, is_prose_row, is_value, parse, row_kv,
+                          to_markdown)
 
 # --------------------------------------------------------------------------- #
 # 임베더 (교체 가능. 평가 중에는 절대 바꾸지 말 것)
@@ -112,7 +113,7 @@ STRATEGIES = {"flat": strat_flat, "markdown": strat_markdown, "stc": strat_stc}
 @dataclass
 class Query:
     q: str
-    key: str             # 행을 식별하는 값 (예: "메모리")
+    keys: list[str]      # 행을 식별하는 값들 (좌측 헤더축 전부). 포맷 독립 gold
     label: str           # 정답 셀의 컬럼 라벨
     answer: str          # 정답 셀 값
     scope: str           # 문서 식별자 (caption) — 문서 간 오답 gold 방지
@@ -135,6 +136,7 @@ def gen_queries(html: str, per_table: int = 6, seed: int = 0) -> list[Query]:
         t = build_table(tag)
         if not t.body:
             continue
+        hc = header_cols(t)
         cands = []
         for row in t.body:
             if is_prose_row(row):
@@ -142,18 +144,19 @@ def gen_queries(html: str, per_table: int = 6, seed: int = 0) -> list[Query]:
             # colspan 으로 복제된 칸은 제외 — row_kv 가 원본 컬럼에만 값을 내므로
             # 복제된 칸을 정답으로 잡으면 도달 불가능한 gold 가 된다 (없는 결함 보고)
             own = [i for i, c in enumerate(row) if c.text and c.origin[1] == i]
-            key_i = own[0] if own else None
-            if key_i is None:
-                continue
-            tgt = [i for i in own if i != key_i and t.labels[i]]
-            if not tgt:
+            # 행을 식별하는 건 좌측 헤더축 '전부' 다. 첫 칸만 쓰면 '전 용' 처럼
+            # 이용료/이용범위 두 행에 모두 걸리는 중의적 질의가 만들어진다.
+            key_is = [i for i in own if i < hc]
+            tgt = [i for i in own if i >= hc and t.labels[i]]
+            if not key_is or not tgt:
                 continue
             i = rng.choice(tgt)
+            keys = [row[k].text for k in key_is]
             scope = t.caption or "문서"
             cands.append(Query(
-                q=f"{scope}에서 {t.labels[key_i]} {row[key_i].text}의 "
+                q=f"{scope}에서 {' '.join(keys)} 의 "
                   f"{t.labels[i].replace(' > ', ' ')}은 얼마인가?",
-                key=row[key_i].text, label=t.labels[i],
+                keys=keys, label=t.labels[i],
                 answer=row[i].text, scope=scope,
                 row_chars=len(row_kv(t.labels, row)),
             ))
@@ -167,6 +170,7 @@ def gen_queries(html: str, per_table: int = 6, seed: int = 0) -> list[Query]:
 # --------------------------------------------------------------------------- #
 
 _MD_ROW = re.compile(r"^\s*\|(.+)\|\s*$", re.M)
+_NUM = re.compile(r"\d[\d,]*(?:\.\d+)?")
 
 
 def recoverable(text: str, q: Query) -> bool:
@@ -177,18 +181,44 @@ def recoverable(text: str, q: Query) -> bool:
     이 함수는 LLM 추출 판정(L4)의 결정론적 대체물이다. 실제 LLM 판정으로 바꾸려면
     이 함수만 교체하면 된다.
     """
-    if q.key not in text or q.answer not in text:
+    if q.answer not in text or any(k not in text for k in q.keys):
         return False
-    # (a) KV 선형화 형태
-    if re.search(rf"{re.escape(q.label)}\s*:\s*{re.escape(q.answer)}", text):
-        return True
+    # (a) KV 선형화 형태 — key 와 (label: answer) 가 **같은 줄**이어야 한다.
+    #     청크 전체에서 찾으면 표 하나가 통째로 든 청크는 무조건 통과해버린다.
+    #     '전용 이용료'를 묻는데 '표준' 줄의 값을 답해도 잡히지 않는다.
+    pat = re.compile(rf"{re.escape(q.label)}\s*:\s*{re.escape(q.answer)}")
+    for line in text.splitlines():
+        if pat.search(line) and all(k in line for k in q.keys):
+            return True
     # (b) 마크다운 표 형태 — 헤더에서 컬럼 위치를 찾고 같은 위치의 본문 셀과 대조
     rows = [[c.strip() for c in m.group(1).split("|")] for m in _MD_ROW.finditer(text)]
     rows = [r for r in rows if not all(set(c) <= {"-", ":", ""} for c in r)]
     if len(rows) >= 2 and q.label in rows[0]:
         j = rows[0].index(q.label)
-        return any(len(r) > j and r[j] == q.answer and q.key in r for r in rows[1:])
+        return any(len(r) > j and r[j] == q.answer
+                   and all(any(k in cell for cell in r) for k in q.keys)
+                   for r in rows[1:])
     return False
+
+
+def distractors(text: str, q: Query) -> int | None:
+    """정답이 들어있는 '줄' 안에, 정답 말고 값처럼 생긴 것이 몇 개나 더 있는가.
+
+    recoverable() 은 완벽한 추출기를 가정하므로 이 실패를 못 잡는다 — 라벨이
+    붙어 있으면 기계적으로는 복원 가능하기 때문이다. 실제 LLM 이 틀리는 원인은
+    정보 손실이 아니라 **한 줄 안의 혼동값 밀도**다. 행 KV 는 한 줄에 값이 4개,
+    셀 단위는 1개다. 낮을수록 좋다. L4(실제 LLM 추출)의 결정론적 선행지표.
+    """
+    own = set(_NUM.findall(q.answer))
+    best = None
+    for line in text.splitlines():
+        if q.answer not in line or any(k not in line for k in q.keys):
+            continue
+        # ponytail: 라벨에 든 연도('2024년')도 세어진다. 모든 전략에 똑같이 얹히는
+        # 상수항이라 비교는 공정하다. 절대값이 필요해지면 라벨 구간을 빼고 셀 것.
+        n = sum(1 for x in _NUM.findall(line) if x not in own)
+        best = n if best is None else min(best, n)
+    return best
 
 
 def score(qs: list[Query], chunks: list[Chunk], emb,
@@ -208,6 +238,7 @@ def score(qs: list[Query], chunks: list[Chunk], emb,
     hit_b = {b: 0 for b in budgets}
     hit_k = {k: 0 for k in ks}
     rr, broken, dens = 0.0, 0, 0.0
+    dist, dist_n = 0, 0
     for r, q in zip(rank, qs):
         gold = {i for i, c in enumerate(chunks) if recoverable(c.text, q)}
         if not gold:
@@ -228,6 +259,10 @@ def score(qs: list[Query], chunks: list[Chunk], emb,
                 dens += (q.row_chars / max(1, used)) if ok else 0.0
         pos = next((j for j, i in enumerate(r) if i in gold), None)
         rr += 1.0 / (pos + 1) if pos is not None else 0.0
+        d = next((x for x in (distractors(docs[i], q) for i in sorted(gold))
+                  if x is not None), None)
+        if d is not None:
+            dist, dist_n = dist + d, dist_n + 1
 
     n = max(1, len(qs))
     return {
@@ -236,6 +271,7 @@ def score(qs: list[Query], chunks: list[Chunk], emb,
         **{f"R@{k}": hit_k[k] / n for k in ks},
         "MRR": rr / n,
         "신호밀도": dens / n,
+        "혼동값": dist / max(1, dist_n),
         "청크수": len(chunks),
         "평균길이": round(sum(len(d) for d in docs) / len(docs)),
     }
@@ -256,7 +292,7 @@ def shuffle_cells(html: str, seed: int = 7) -> str:
 
 # --------------------------------------------------------------------------- #
 
-KEYS = ["행파괴율", "Rec@1200자", "Rec@3000자", "R@1", "R@5", "MRR", "신호밀도", "청크수", "평균길이"]
+KEYS = ["행파괴율", "Rec@3000자", "R@1", "MRR", "혼동값", "신호밀도", "청크수", "평균길이"]
 
 
 def _row(name: str, m: dict) -> str:

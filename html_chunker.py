@@ -160,6 +160,40 @@ def _header_rows(grid: list[list[Cell]]) -> int:
     return min(max(n, 1), max(0, len(grid) - 1))
 
 
+def is_value(s: str) -> bool:
+    """금액·수량·비율처럼 '값'으로 보이는가.
+
+    '숫자 포함' 으로는 안 된다 — 각주 '주1)', 제품명 '시스템LSI', 화면번호 '#0206'
+    이 전부 걸린다. 숫자가 2자 이상이면서 전체의 30% 이상일 때만 값으로 본다.
+    """
+    d = sum(c.isdigit() for c in s)
+    return d >= 2 and d / max(1, len(s)) >= 0.3
+
+
+def header_cols(t: "Table") -> int:
+    """행 헤더축의 깊이 = 좌측에서부터 '값이 아닌' 컬럼 수.
+
+    _header_rows 를 90도 돌린 것. 헤더 행이 금액·수량을 담지 않듯 행 헤더 컬럼도
+    담지 않는다. 05 픽스처에서 컬럼0(표준/전용)·컬럼1(이용료/이용범위)이 행 헤더축,
+    컬럼2부터가 값이다.
+
+    이게 2 이상이고 열 헤더도 2단 이상이면 그 표는 행이 레코드인 목록이 아니라
+    2차원 교차표다 — 행 단위 KV 로는 한 줄에 여러 레코드가 뭉친다.
+    """
+    if not t.grid:
+        return 0
+    n = 0
+    for c in range(len(t.grid[0])):
+        if any(is_value(r[c].text) for r in t.body if r[c].text):
+            break
+        n += 1
+    return min(n, len(t.grid[0]) - 1)      # 값 컬럼을 최소 1개는 남긴다
+
+
+def is_crosstab(t: "Table") -> bool:
+    return t.n_header >= 2 and header_cols(t) >= 2
+
+
 def _labels(grid, n_header: int, n_cols: int) -> list[str]:
     """다단 헤더를 컬럼별로 합성. 상위>하위 순, 중복 제거."""
     out = []
@@ -306,6 +340,39 @@ def _pack_text(text: str, max_chars: int) -> list[str]:
     return out
 
 
+def row_units(t: "Table", row: list[Cell], hc: int) -> list[str]:
+    """청킹의 최소 단위 문자열.
+
+    일반 표(행 = 레코드)는 행 하나가 한 단위다. 교차표(행축·열축이 둘 다 계층)는
+    **값 셀 하나가 한 단위**다 — 행으로 묶으면 한 줄에 여러 레코드가 뭉쳐서
+    '전용 이용료' 를 물었는데 같은 줄의 다른 값을 답하는 사고가 난다.
+
+        행 단위:  구 분: 전 용, 구 분: 이용료, ... 법인: 연간 55,000원, ... 법인: 연간 3,300원
+        셀 단위:  전 용 이용료 가온클라우드(GaonCloud) > 법인: 연간 55,000원
+    """
+    if hc <= 0:
+        line = row_kv(t.labels, row)
+        return [line] if line else []
+
+    path, seen = [], set()
+    for i in range(hc):
+        if row[i].text and row[i].origin not in seen:
+            seen.add(row[i].origin)
+            path.append(row[i].text)
+    pre = " ".join(path)
+
+    out, prev = [], None
+    for i in range(hc, len(row)):
+        cell = row[i]
+        if not cell.text or cell.origin == prev:
+            prev = cell.origin
+            continue
+        prev = cell.origin
+        head = " ".join(x for x in (pre, t.labels[i]) if x)
+        out.append(f"{head}: {cell.text}" if head else cell.text)
+    return out
+
+
 def is_prose_row(row: list[Cell], min_chars: int = 60) -> bool:
     """표 전체 폭을 한 셀이 덮고 내용이 긴 행 = 데이터가 아니라 본문 안내문.
 
@@ -328,18 +395,20 @@ def _pack_table(t: Table, tid: int, heading: str, max_chars: int) -> list[Chunk]
     cols = ", ".join(l for l in t.labels if l)
     header_line = f"{prefix}\n컬럼: {cols}" if cols else prefix
 
-    out, cur, start = [], [], 0
+    # 교차표는 값 셀 1개, 일반 표는 행 1개가 청킹의 최소 단위
+    hc = header_cols(t) if is_crosstab(t) else 0
+
+    out, cur, rows_in = [], [], []
     budget = max_chars - len(header_line)
 
-    def emit(end: int):
-        rows = t.body[start:end]
-        lines = [row_kv(t.labels, r) for r in rows]
-        body = "\n".join(lines)
+    def emit():
+        rs = sorted(set(rows_in))
         out.append(Chunk(
-            text=f"{header_line}\n{body}",
-            context=f"{prefix}\n{to_markdown(t.labels, rows)}",
-            kind="table", heading=heading, table_id=tid, row_span=(start, end),
-            oversize=any(len(l) > budget for l in lines),
+            text=f"{header_line}\n" + "\n".join(cur),
+            context=f"{prefix}\n{to_markdown(t.labels, [t.body[i] for i in rs])}",
+            kind="table", heading=heading, table_id=tid,
+            row_span=(rs[0], rs[-1] + 1),
+            oversize=any(len(l) > budget for l in cur),
         ))
 
     used = 0
@@ -347,25 +416,22 @@ def _pack_table(t: Table, tid: int, heading: str, max_chars: int) -> list[Chunk]
         if is_prose_row(row):
             # 표를 여기서 끊고 안내문은 본문 청크로 따로 낸다
             if cur:
-                emit(i)
-                cur, used = [], 0
-            txt = row[0].text
-            for piece in _pack_text(txt, max_chars):
+                emit()
+                cur, rows_in, used = [], [], 0
+            for piece in _pack_text(row[0].text, max_chars):
                 body = f"{prefix}\n{piece}" if title else piece
                 out.append(Chunk(text=body, context=body, kind="text",
                                  heading=heading, table_id=tid, row_span=(i, i + 1)))
-            start = i + 1
             continue
-        line = row_kv(t.labels, row)
-        if not line:
-            continue
-        if cur and used + len(line) + 1 > budget:
-            emit(i)
-            cur, used, start = [], 0, i
-        cur.append(line)
-        used += len(line) + 1
+        for line in row_units(t, row, hc):
+            if cur and used + len(line) + 1 > budget:
+                emit()
+                cur, rows_in, used = [], [], 0
+            cur.append(line)
+            rows_in.append(i)
+            used += len(line) + 1
     if cur:
-        emit(len(t.body))
+        emit()
     return out
 
 
@@ -399,12 +465,13 @@ def invariants(html: str, chunks: list[Chunk] | None = None, **kw) -> dict:
     atomic = True
     for tid, t in enumerate(tables):
         owned = [c for c in chunks if c.table_id == tid]
+        hc = header_cols(t) if is_crosstab(t) else 0
         for r in t.body:
             if is_prose_row(r):          # 본문 청크로 빠진 행. KV 로 존재하지 않는 게 정상
                 continue
-            kv = row_kv(t.labels, r)
-            if kv and not any(kv in c.text for c in owned):
-                atomic = False
+            for unit in row_units(t, r, hc):
+                if not any(unit in c.text for c in owned):
+                    atomic = False
     return {
         "rectangular": rect,
         "cell_conservation": conserved,
