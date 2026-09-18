@@ -21,8 +21,8 @@ from dataclasses import dataclass
 import numpy as np
 from bs4 import BeautifulSoup
 
-from html_chunker import (FIXTURE, Chunk, build_table, clean, invariants, parse,
-                          row_kv, to_markdown)
+from html_chunker import (BACKEND, FIXTURE, Chunk, build_table, clean, invariants,
+                          parse, row_kv, to_markdown)
 
 # --------------------------------------------------------------------------- #
 # 임베더 (교체 가능. 평가 중에는 절대 바꾸지 말 것)
@@ -78,14 +78,14 @@ class STEmbedder:
 
 def strat_flat(html: str, max_chars: int) -> list[Chunk]:
     """대부분의 팀이 실제로 배포하는 베이스라인: get_text() + 고정 길이 분할."""
-    txt = clean(BeautifulSoup(html, "html.parser").get_text(" "))
+    txt = clean(BeautifulSoup(html, BACKEND).get_text(" "))
     return [Chunk(text=txt[i:i + max_chars], context=txt[i:i + max_chars], kind="text")
             for i in range(0, len(txt), max_chars)]
 
 
 def strat_markdown(html: str, max_chars: int) -> list[Chunk]:
     """표를 마크다운으로 보존하되 행 원자성은 없음 (길이로만 자름)."""
-    soup = BeautifulSoup(html, "html.parser")
+    soup = BeautifulSoup(html, BACKEND)
     parts = []
     for t in soup.find_all("table"):
         if t.find_parent("table") is None:
@@ -127,7 +127,7 @@ def gen_queries(html: str, per_table: int = 6, seed: int = 0) -> list[Query]:
     패러프레이즈까지 보려면 같은 (answer, row_kv) 에 LLM 으로 질의문만 다시 써 붙일 것.
     """
     rng = random.Random(seed)
-    soup = BeautifulSoup(html, "html.parser")
+    soup = BeautifulSoup(html, BACKEND)
     out: list[Query] = []
     for tag in soup.find_all("table"):
         if tag.find_parent("table") is not None:
@@ -239,7 +239,7 @@ def score(qs: list[Query], chunks: list[Chunk], emb,
 def shuffle_cells(html: str, seed: int = 7) -> str:
     """L3 음성 통제: 표 내부 셀 값만 섞는다. 텍스트 총량·토큰 분포는 동일."""
     rng = random.Random(seed)
-    soup = BeautifulSoup(html, "html.parser")
+    soup = BeautifulSoup(html, BACKEND)
     for t in soup.find_all("table"):
         cells = [c for c in t.find_all(["td", "th"]) if c.find_parent("table") is t]
         texts = [c.get_text(" ", strip=True) for c in cells]

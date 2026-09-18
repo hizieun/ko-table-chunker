@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>OCR 산출물 원형</title></head>
+<body>
+
+<!-- 실제 OCR 엔진 산출물의 현실:
+     인라인 style 폭탄 / 닫는 태그 누락 / &nbsp; / <br> 남발 / 빈 <tr> /
+     rowspan 이상값 / 중첩 표 / 레이아웃용 표 / <p> 안에 <table> -->
+
+<div style="position:absolute;left:112px;top:88px;width:640px;font-family:'맑은 고딕'">
+<span style="font-size:18px;font-weight:700">제3기&nbsp;&nbsp;감사보고서</span><br>
+<span style="font-size:11px;color:#666">주식회사 한빛소재&nbsp;|&nbsp;2024.01.01 ~ 2024.12.31</span>
+</div>
+
+<p style="margin-top:42px">당사는&nbsp;한국채택국제회계기준에&nbsp;따라&nbsp;재무제표를&nbsp;작성하였으며,<br>
+외부감사인의&nbsp;감사를&nbsp;받았습니다. 주요&nbsp;재무현황은&nbsp;다음과&nbsp;같습니다.
+
+<!-- <p> 가 안 닫힌 채 표가 시작됨 -->
+<table border="1" cellspacing="0" style="border-collapse:collapse;width:100%">
+<caption style="font-weight:bold">요약 재무상태표 (단위: 천원)</caption>
+<tr style="background:#f2f2f2">
+  <td rowspan="2" style="text-align:center">구분</td>
+  <td colspan="2" style="text-align:center">제3기(당기)</td>
+  <td colspan="2">제2기(전기)</td>
+<tr>
+  <td>금액</td><td>구성비</td><td>금액</td><td>구성비</td></tr>
+
+<tr><td>유동자산</td><td>18,420,100</td><td>42.1%</td><td>16,880,400</td><td>40.8%</td></tr>
+<tr><td>&nbsp;&nbsp;현금및현금성자산<td>4,210,800<td>9.6%<td>3,940,200<td>9.5%</tr>
+<tr><td>&nbsp;&nbsp;매출채권<td>7,180,300<td>16.4%<td>6,720,900<td>16.2%</tr>
+
+<tr></tr>
+
+<tr><td>비유동자산</td><td>25,310,700</td><td>57.9%</td><td>24,490,100</td><td>59.2%</td></tr>
+<tr><td rowspan="0">&nbsp;&nbsp;유형자산</td><td>19,840,200</td><td>45.4%</td><td>19,110,600</td><td>46.2%</td></tr>
+<tr><td>&nbsp;&nbsp;무형자산<td>2,180,400<td>5.0%<td>2,040,800<td>4.9%</tr>
+
+<tr><td colspan="9">자산총계</td></tr>
+<tr><td>합계</td><td>43,730,800</td><td>100.0%</td><td>41,370,500</td><td>100.0%</td></tr>
+</table>
+
+<p>부채 및 자본 항목은 아래 표를 참조하시기 바랍니다.<br><br>
+
+<!-- 중첩 표: 셀 안에 또 표 -->
+<table border="1" cellspacing="0">
+<caption>부채 및 자본</caption>
+<tr><td>구분</td><td>세부내역</td><td>금액</td></tr>
+<tr><td>유동부채</td>
+    <td><table><tr><td>매입채무</td><td>3,410,200</td></tr>
+               <tr><td>단기차입금</td><td>5,120,000</td></tr></table></td>
+    <td>8,530,200</td></tr>
+<tr><td>비유동부채</td><td>장기차입금</td><td>11,240,000</td></tr>
+<tr><td>자본금</td><td>보통주</td><td>2,000,000</td></tr>
+<tr><td>이익잉여금</td><td>미처분이익잉여금</td><td>21,960,600</td></tr>
+</table>
+
+<!-- 레이아웃용 표: 헤더 없음, 2열, 본문 배치 목적 -->
+<table cellpadding="8" style="border:none">
+<tr>
+  <td style="vertical-align:top;width:50%">
+    감사의견은 적정이며, 계속기업으로서의 존속능력에 유의적 의문을 제기할 만한
+    사건이나 상황은 발견되지 않았습니다.
+  </td>
+  <td style="vertical-align:top">
+    핵심감사사항으로는 매출채권 손상 평가와 재고자산 평가가 선정되었으며,
+    관련 감사절차를 수행하였습니다.
+  </td>
+</tr>
+</table>
+
+<div style="font-size:10px;color:#888;margin-top:24px">
+※&nbsp;본&nbsp;보고서는&nbsp;OCR로&nbsp;변환된&nbsp;문서이며&nbsp;원본과&nbsp;차이가&nbsp;있을&nbsp;수&nbsp;있습니다.
+</div>
+
+</body></html>

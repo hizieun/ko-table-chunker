@@ -6,7 +6,7 @@
   3. 행 단위 KV 선형화 -> 임베딩 텍스트 / 마크다운 표 -> LLM 컨텍스트 (이중 표현)
   4. 청크 경계는 절대 행을 쪼개지 않음
 
-의존성: beautifulsoup4 만. lxml 불필요 (stdlib html.parser 백엔드).
+의존성: beautifulsoup4 + html5lib. lxml 불필요.
 """
 
 from __future__ import annotations
@@ -22,6 +22,12 @@ HEAD = {"h1", "h2", "h3", "h4", "h5", "h6"}
 BLOCK = {"p", "div", "li", "blockquote", "pre", "section", "article",
          "figcaption", "dd", "dt", "address", *HEAD}
 
+# html.parser 는 HTML5 "in table" 삽입 모드를 구현하지 않아 안 닫힌 <td>/<tr> 을
+# 자동으로 닫지 않고 중첩시킨다. OCR 엔진 산출물이 정확히 그 형태라, 그 백엔드로는
+# 표가 조용히 폭발한다 (fixtures/03: 5열 표가 53열로). html5lib 은 실제 HTML5
+# 트리 구성 알고리즘을 구현하므로 올바르게 닫는다. ~10배 느리지만 수집은 1회뿐이다.
+BACKEND = "html5lib"
+
 _WS = re.compile(r"[\s ​‌‍﻿]+")
 # ponytail: 한국어 문장 종결 휴리스틱. 인용부호/괄호 안 마침표는 오분할 가능 —
 # 오분할이 검색 품질에 실측으로 걸리면 kiwipiepy 문장분리로 교체.
@@ -29,12 +35,20 @@ _SENT = re.compile(r"(?<=[.!?。？！])\s+|(?<=[다요음임함])\.\s+")
 
 
 def clean(s: str) -> str:
-    """공백 정규화 + 유니코드 NFC.
+    """공백 정규화 + 유니코드 NFKC.
 
-    NFC 는 한국어에서 필수: OCR/HTML/macOS 경유 텍스트가 NFD(자모 분리)로
-    들어오면 '한글' != '한글' 이 되어 임베딩·정확도 평가가 조용히 망가진다.
+    NFD(자모 분리) 유입은 한국어에서 치명적이다. OCR/HTML/macOS 를 거친 텍스트가
+    NFD 로 들어오면 '한글' != '한글' 이 되어 임베딩·정확일치가 조용히 망가진다.
+    눈으로는 구분되지 않는다.
+
+    NFC 가 아니라 NFKC 인 이유: NFC 는 전각을 접지 않아 '４,３２０' != '4,320' 이
+    남는다. 한국어 문서에는 전각 숫자, ㈜, ①, ㎡, ℃ 가 흔하고 전부 어휘 검색을
+    깨뜨린다. NFKC 는 이들을 '4,320', '(주)', '1', 'm2', '°C' 로 접는다.
+
+    !! 질의에도 같은 함수를 적용할 것 !! 색인만 정규화하고 질의를 안 하면
+    오히려 매칭이 더 나빠진다. 중요한 건 양쪽이 같은 형태라는 것이다.
     """
-    return _WS.sub(" ", unicodedata.normalize("NFC", s)).strip()
+    return _WS.sub(" ", unicodedata.normalize("NFKC", s)).strip()
 
 
 # --------------------------------------------------------------------------- #
@@ -215,12 +229,13 @@ def _walk(node, w: _Walk):
             w.blocks.append(("break", "", w.heading()))
 
 
-def parse(html: str, max_chars: int = 900, backend: str = "html.parser") -> list[Chunk]:
+def parse(html: str, max_chars: int = 900, backend: str = BACKEND) -> list[Chunk]:
     """HTML -> 청크 목록 (문서 순서 유지).
 
     max_chars 는 글자 기준. BGE-M3 기준 한국어 1글자 ≈ 0.6~0.9 토큰이므로
     900자 ≈ 550~800 토큰. 모델 상한에 맞춰 조정할 것.
-    backend="html5lib" 로 바꾸면 깨진 마크업에 더 관대 (대신 ~10배 느림).
+    backend 는 BACKEND 참조. 속도가 급하고 입력이 깨끗하다고 확신하면
+    backend="html.parser" 로 낮출 수 있다 (표가 깨질 위험을 감수하는 것).
     """
     soup = BeautifulSoup(html, backend)
     w = _Walk()
@@ -318,17 +333,20 @@ def _pack_table(t: Table, tid: int, heading: str, max_chars: int) -> list[Chunk]
 def invariants(html: str, chunks: list[Chunk] | None = None, **kw) -> dict:
     """정답 라벨 0개로 파서 회귀를 잡는 검사. 모든 문서에 공짜로 돌릴 수 있다."""
     chunks = parse(html, **kw) if chunks is None else chunks
-    soup = BeautifulSoup(html, kw.get("backend", "html.parser"))
-    tables = [build_table(t) for t in soup.find_all("table")
-              if t.find_parent("table") is None]
+    soup = BeautifulSoup(html, kw.get("backend", BACKEND))
+    tags = [t for t in soup.find_all("table") if t.find_parent("table") is None]
+    tables = [build_table(t) for t in tags]
 
     rect = all(len({len(r) for r in t.grid}) <= 1 for t in tables if t.grid)
+    # 원본 셀이 차지해야 할 칸 수 == 실제로 차지한 칸 수.
+    # 들쭉날쭉한 행을 메우는 빈 칸(origin == (-1,-1))은 정상이므로 제외한다 —
+    # 이게 잡아야 하는 건 병합 영역이 겹쳐 셀이 덮여 사라지는 경우다.
     conserved = all(
-        sum(len(r) for r in t.grid) == sum(
+        sum(1 for r in t.grid for c in r if c.origin != (-1, -1)) == sum(
             max(1, _int(td.get("rowspan"), 1)) * max(1, _int(td.get("colspan"), 1))
-            for td in _src_cells(soup, t)
-        ) if t.grid else True
-        for t in tables
+            for td in tag.find_all(["td", "th"]) if _own(td, tag)
+        )
+        for tag, t in zip(tags, tables) if t.grid
     )
     # 텍스트 보존율: 원문 토큰 중 어떤 청크에도 안 나타난 비율
     blob = " ".join(c.text for c in chunks)
@@ -354,11 +372,6 @@ def invariants(html: str, chunks: list[Chunk] | None = None, **kw) -> dict:
     }
 
 
-def _src_cells(soup, t: Table):
-    for tbl in soup.find_all("table"):
-        if tbl.find_parent("table") is None and build_table(tbl).grid == t.grid:
-            return [c for c in tbl.find_all(["td", "th"]) if _own(c, tbl)]
-    return []
 
 
 FIXTURE = """
@@ -394,7 +407,7 @@ if __name__ == "__main__":
     binv = invariants(BROKEN)
     assert binv["rectangular"], "깨진 입력에서 그리드가 무너짐"
     assert bc, "깨진 입력에서 청크가 하나도 안 나옴"
-    bt = build_table(BeautifulSoup(BROKEN, "html.parser").find("table"))
+    bt = build_table(BeautifulSoup(BROKEN, BACKEND).find("table"))
     assert all(len(r) == len(bt.grid[0]) for r in bt.grid)
     assert "안쪽1" in " ".join(c.text for r in bt.grid for c in r), "중첩 표 텍스트 유실"
     assert binv["text_coverage"] > 0.98, binv["missing_tokens"]
@@ -407,7 +420,7 @@ if __name__ == "__main__":
     assert inv["row_atomic"], "행이 청크 경계에서 쪼개짐"
     assert inv["text_coverage"] > 0.98, f"텍스트 유실: {inv['missing_tokens']}"
 
-    t = build_table(BeautifulSoup(FIXTURE, "html.parser").find("table"))
+    t = build_table(BeautifulSoup(FIXTURE, BACKEND).find("table"))
     assert t.n_header == 2, t.n_header
     assert t.labels == ["사업부문", "2024년 > 상반기", "2024년 > 하반기", "증감률"], t.labels
     # rowspan 전개: 2번째 반도체 행에도 '반도체'가 채워져 있어야 검색이 된다
