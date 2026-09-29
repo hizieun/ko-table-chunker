@@ -151,13 +151,28 @@ def _header_rows(grid: list[list[Cell]]) -> int:
             else:
                 break
     else:
-        n = 0
+        # 멈춘 '이유' 로 헤더 없음과 헤더 있음을 가른다.
+        #   긴 문장 때문에 멈춤 -> 그 행은 레코드다. 헤더가 아예 없는 표(2열 구분|내용).
+        #   숫자 때문에 멈춤   -> '부처|2024년' 처럼 헤더에 연도가 든 경우. 헤더는 있다.
+        # 첫 레코드를 헤더로 삼으면 그 키·값이 통째로 컬럼명이 되어 표가 완파된다.
+        n, headerless = 0, False
         for row in grid[:3]:                      # 4단 이상 헤더는 실물에 거의 없다
-            if row and not any(_DIGIT.search(c.text) for c in row):
-                n += 1
-            else:
+            if not row:
                 break
-    return min(max(n, 1), max(0, len(grid) - 1))
+            # ponytail: 25자. 이보다 긴 헤더 라벨을 쓰는 표는 헤더 없음으로 오판한다.
+            if any(len(c.text) > 25 for c in row):
+                headerless = n == 0
+                break
+            if any(_DIGIT.search(c.text) for c in row):
+                break
+            n += 1
+        if not headerless:
+            n = max(n, 1)
+    return min(n, max(0, len(grid) - 1))
+
+
+_CODE = re.compile(r"^[A-Za-z]{1,3}[-_]?\d+$")          # A0000, KR-123
+_IDNUM = re.compile(r"^\d+(?:-\d+){2,}$")               # 계좌·사업자번호 123-45-67890
 
 
 def is_value(s: str) -> bool:
@@ -165,7 +180,17 @@ def is_value(s: str) -> bool:
 
     '숫자 포함' 으로는 안 된다 — 각주 '주1)', 제품명 '시스템LSI', 화면번호 '#0206'
     이 전부 걸린다. 숫자가 2자 이상이면서 전체의 30% 이상일 때만 값으로 본다.
+
+    식별자는 숫자 비율이 높아도 값이 아니다. 종목코드 'A0000' 을 값으로 보면
+    그 컬럼이 행 헤더축에서 빠져 표 전체의 키 컬럼이 사라진다.
+
+    ponytail: 접두 글자 없는 순수 숫자 코드(우편번호 '06236', 사번 '20240113')는
+    여전히 값으로 본다. 구분할 근거가 셀 안에 없다 — 컬럼명을 봐야 하고, 그건
+    이 함수의 책임이 아니다. 실제로 문제가 되면 컬럼명 화이트리스트를 붙일 것.
     """
+    s = s.strip()
+    if _CODE.match(s) or _IDNUM.match(s):
+        return False
     d = sum(c.isdigit() for c in s)
     return d >= 2 and d / max(1, len(s)) >= 0.3
 
@@ -182,16 +207,32 @@ def header_cols(t: "Table") -> int:
     """
     if not t.grid:
         return 0
+    # 안내문 행은 전폭을 덮어 모든 컬럼을 '내용 있음' 으로 만든다. 제외해야
+    # 넘친 colspan 이 만든 빈 칸을 헤더축으로 오인하지 않는다.
+    body = [r for r in t.body if not is_prose_row(r)] or t.body
+    ncols = len(t.grid[0])
+    last = max((c for c in range(ncols) if any(r[c].text for r in body)), default=0)
+
     n = 0
-    for c in range(len(t.grid[0])):
-        if any(is_value(r[c].text) for r in t.body if r[c].text):
+    for c in range(ncols):
+        # 빈 컬럼(Word 레이아웃의 spacer, 넘친 colspan의 빈 칸)은 그냥 지나친다.
+        # 거기서 멈추면 그 뒤의 키 컬럼을 놓친다. 경계는 last 가 잡는다.
+        if any(is_value(r[c].text) for r in body if r[c].text):
             break
         n += 1
-    return min(n, len(t.grid[0]) - 1)      # 값 컬럼을 최소 1개는 남긴다
+    return min(n, last)                    # 값 컬럼을 최소 1개는 남긴다
 
 
 def is_crosstab(t: "Table") -> bool:
-    return t.n_header >= 2 and header_cols(t) >= 2
+    """셀 단위로 쪼개야 하는 표인가.
+
+    (a) 행축·열축이 둘 다 계층인 2차원 교차표
+    (b) 헤더가 아예 없는 표 — 2열 '구분|내용' 형태. 좌측이 곧 라벨이므로
+        셀 단위로 내면 '신청방법: 영업점 방문...' 이 된다. 행 KV 로 내면
+        라벨이 비어 값만 나열되어 무엇이 무엇인지 사라진다.
+    """
+    hc = header_cols(t)
+    return (t.n_header >= 2 and hc >= 2) or (t.n_header == 0 and hc >= 1)
 
 
 def _labels(grid, n_header: int, n_cols: int) -> list[str]:

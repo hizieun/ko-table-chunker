@@ -8,7 +8,7 @@
 
 from bs4 import BeautifulSoup
 
-from html_chunker import BACKEND, build_table, parse, row_kv
+from html_chunker import BACKEND, build_table, parse, row_kv, row_units
 
 BLANK = (-1, -1)
 
@@ -279,6 +279,38 @@ def test_일반표는_행단위를_유지한다():
              for l in c.text.splitlines() if l.startswith("회사명:")]
     assert len(lines) == 1, lines
     assert "자산총액: 2,840,000" in lines[0] and "당기순손익: 184,000" in lines[0]
+
+
+def test_헤더없는_2열표():
+    """'구분|내용' 2열 표는 헤더 행이 아예 없다. 첫 레코드를 헤더로 삼으면
+    그 키와 값이 통째로 컬럼명이 되어 표가 완파된다 (40개 코퍼스에서 발견)."""
+    from html_chunker import header_cols, is_crosstab
+    t = T("""<table>
+      <tr><td>신청방법</td><td>영업점 방문 또는 온라인 신청서 제출 후 본인확인 절차를 거칩니다.</td></tr>
+      <tr><td>처리기간</td><td>접수일로부터 영업일 기준 3일 이내</td></tr>
+      <tr><td>구비서류</td><td>신분증, 거래인감, 법인의 경우 사업자등록증 사본 각 1부</td></tr>
+    </table>""")
+    assert t.n_header == 0, f"헤더 {t.n_header}행 — 첫 레코드를 헤더로 먹었다"
+    assert header_cols(t) == 1 and is_crosstab(t)
+    units = row_units(t, t.body[0], 1)
+    assert units == ["신청방법: 영업점 방문 또는 온라인 신청서 제출 후 본인확인 절차를 거칩니다."], units
+
+
+def test_식별자는_값이_아니다():
+    """종목코드 'A0000' 을 값으로 보면 그 컬럼이 행 헤더축에서 빠져
+    표의 키 컬럼이 통째로 사라진다 (40개 코퍼스에서 발견)."""
+    from html_chunker import header_cols, is_value
+    assert not is_value("A0000") and not is_value("KR-123")
+    assert not is_value("123-45-67890")          # 사업자번호
+    assert is_value("3,680,000원") and is_value("1.827%")
+
+    t = T("""<table>
+      <tr><td>코드</td><td>종목명</td><td>구분</td><td>수수료율</td></tr>
+      <tr><td>A0000</td><td>청람증권1호</td><td>ISA</td><td>1.462%</td></tr>
+      <tr><td>A0001</td><td>해성금융2호</td><td>펀드</td><td>2.002%</td></tr>
+    </table>""")
+    assert header_cols(t) == 3, header_cols(t)   # 코드·종목명·구분 이 키 컬럼
+    assert "코드: A0000" in row_kv(t.labels, t.body[0])
 
 
 if __name__ == "__main__":
