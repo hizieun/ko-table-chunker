@@ -22,6 +22,11 @@ python3 l4_extract.py fixtures/*.html --backend anthropic   # L4 (LLM 필요)
 
 python3 make_corpus.py --n 40         # 실파일급 합성 코퍼스 생성 (corpus/)
 python3 evaluate.py corpus/*.htm      # 40문서 / 표 86개 규모로 측정
+
+# 검색층 (파서와 독립. 조합해서 쓴다)
+python3 evaluate.py corpus/*.htm --st jhgan/ko-sroberta-multitask --hybrid
+python3 evaluate.py corpus/*.htm --st BAAI/bge-m3 --hybrid \
+        --rerank dragonkue/bge-reranker-v2m3-ko      # 리랭커는 1~2GB 다운로드
 ```
 
 ---
@@ -387,14 +392,33 @@ stc             0.000      0.877      0.358      0.528      2.461        230
 
 **파서를 전혀 건드리지 않고 검색층만 바꾼 결과:**
 
-| 검색 | R@1 | MRR |
-|---|---|---|
-| 어휘 (char 3-gram TFIDF) | 0.358 | 0.528 |
-| 밀집 (ko-sroberta) | 0.353 | 0.533 |
-| **하이브리드 RRF** | **0.438** | **0.606** |
+| 검색 | R@1 | MRR | 비용 |
+|---|---|---|---|
+| 어휘 (char 3-gram TFIDF) | 0.358 | 0.528 | 없음 |
+| 밀집 (ko-sroberta) | 0.353 | 0.533 | 모델 |
+| **하이브리드 RRF** | **0.438** | **0.606** | 없음(둘 다 있으면) |
 
-다운로드 0, 파서 변경 0 으로 R@1 +22%. 진단이 맞다는 확인이고, 리랭커를 붙이면
-더 오른다.
+다운로드 0, 파서 변경 0 으로 **R@1 +22%**. 진단이 맞다는 확인이다.
+
+### 검색기는 파서와 분리해 조합한다
+
+`Retriever` 는 점수가 아니라 **순위**를 낸다. RRF 융합과 리랭커는 점수 스케일이
+서로 달라 더할 수 없지만, 순위로 통일하면 어떤 조합이든 같은 방식으로 섞인다.
+
+```python
+from evaluate import CharTfidf, STEmbedder, HybridRRF, Reranked
+ret = HybridRRF(CharTfidf(), STEmbedder("BAAI/bge-m3"))
+ret = Reranked(ret, "dragonkue/bge-reranker-v2m3-ko")   # 선택
+ranking = ret.ranks(["가온클라우드 법인 전용 이용료는?"], chunk_texts)[0]
+```
+
+**왜 RRF 인가**: 순위가 포화한다. 한쪽에서 500등이어도 다른 쪽 1등이면 살아남지만,
+단순 순위합(Borda)은 500 이라는 값이 그대로 더해져 뭉개버린다. 한국어는 조사 때문에
+어휘 매칭이 깎이고 반대로 숫자·고유명사는 밀집이 약해서, 한쪽만 확신하는 경우가
+잦다 — 그래서 포화가 중요하다. 이 성질을 테스트로 고정해 뒀다.
+
+**리랭커는 기본값이 아니다.** 한국어 교차 인코더는 전부 1~2GB 다운로드가 필요해
+`--rerank` 로 열어만 뒀다. 하이브리드만으로 이미 +22% 다.
 
 합성 코퍼스보다 문서가 짧고 표가 여러 개라 `stc` 의 랭킹 문제(아래)가 덜 나타난다.
 `행파괴율` 은 두 데이터셋에서 동일한 패턴 — 문서 종류가 아니라 청킹 전략의 성질이다.

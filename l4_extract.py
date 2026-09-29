@@ -22,7 +22,8 @@ import re
 import subprocess
 import unicodedata
 
-from evaluate import CharTfidf, STRATEGIES, gen_queries
+from evaluate import (STRATEGIES, Retriever, build_retriever, describe,
+                      gen_queries)
 from html_chunker import Chunk
 
 # --------------------------------------------------------------------------- #
@@ -129,14 +130,13 @@ DEFAULT_MODEL = {"anthropic": "claude-haiku-4-5-20251001",
 
 # --------------------------------------------------------------------------- #
 
-def retrieve(chunks: list[Chunk], q: str, emb, budget: int = 3000) -> str:
-    """예산만큼 상위 청크를 모아 컨텍스트로. L2 와 같은 규칙(예산 정규화)."""
-    import numpy as np
-    docs = [c.text for c in chunks]
-    emb.fit(docs)
-    sims = emb.encode([q]) @ emb.encode(docs).T
+def retrieve(chunks: list[Chunk], ranking, budget: int = 3000) -> str:
+    """예산만큼 상위 청크를 모아 컨텍스트로. L2 와 같은 규칙(예산 정규화).
+
+    LLM 에는 임베딩용 text 가 아니라 context(표는 마크다운)를 넣는다 — 이중 표현.
+    """
     out, used = [], 0
-    for i in np.argsort(-sims[0]):
+    for i in ranking:
         t = chunks[i].context or chunks[i].text
         if used + len(t) > budget and out:
             break
@@ -146,18 +146,21 @@ def retrieve(chunks: list[Chunk], q: str, emb, budget: int = 3000) -> str:
 
 
 def run(docs: list[str], backend: str, model: str, cmd: str = "",
-        max_chars: int = 900, limit: int | None = None) -> dict:
+        max_chars: int = 900, limit: int | None = None,
+        retriever: Retriever | None = None, verbose: bool = True) -> dict:
+    from evaluate import CharTfidf
     qs = [q for d in docs for q in gen_queries(d)]
     if limit:
         qs = qs[:limit]
+    ret = retriever or CharTfidf()
     call = BACKENDS[backend]
     results = {}
     for name, fn in STRATEGIES.items():
         chunks = [c for d in docs for c in fn(d, max_chars)]
-        emb = CharTfidf()
+        rankings = ret.ranks([q.q for q in qs], [c.text for c in chunks])
         ok = 0
-        for q in qs:
-            ctx = retrieve(chunks, q.q, emb)
+        for q, ranking in zip(qs, rankings):
+            ctx = retrieve(chunks, ranking)
             kw = {"cmd": cmd} if backend == "cmd" else {}
             try:
                 pred = call(PROMPT.format(ctx=ctx, q=q.q), model, **kw)
@@ -166,10 +169,11 @@ def run(docs: list[str], backend: str, model: str, cmd: str = "",
                 break
             hit = same_value(pred, q.answer)
             ok += hit
-            if not hit:
+            if not hit and verbose:
                 print(f"  ✗ [{name}] {q.q[:60]}\n      정답={q.answer!r} 응답={pred[:60]!r}")
         results[name] = ok / max(1, len(qs))
-        print(f"{name:<10} 정답률 {results[name]:.3f}  ({ok}/{len(qs)})")
+        if verbose:
+            print(f"{name:<10} 정답률 {results[name]:.3f}  ({ok}/{len(qs)})")
     return results
 
 
@@ -180,9 +184,15 @@ if __name__ == "__main__":
     ap.add_argument("--model", default=None)
     ap.add_argument("--cmd", default="", help="--backend cmd 일 때 실행할 명령")
     ap.add_argument("--limit", type=int, help="질의 수 상한 (비용 통제)")
+    ap.add_argument("--st", help="밀집 임베더 (예: BAAI/bge-m3)")
+    ap.add_argument("--hybrid", action="store_true", help="어휘+밀집 RRF 융합")
+    ap.add_argument("--rerank", metavar="MODEL", help="교차 인코더 리랭커 (1~2GB)")
+    ap.add_argument("--rerank-top", type=int, default=30)
     a = ap.parse_args()
 
     docs = [open(p, encoding="utf-8").read() for p in a.paths]
     model = a.model or DEFAULT_MODEL[a.backend]
+    ret = build_retriever(a)
     print(f"L4 종단 추출 — backend={a.backend} model={model or a.cmd}")
-    run(docs, a.backend, model, a.cmd, limit=a.limit)
+    print(f"검색기: {describe(ret)}")
+    run(docs, a.backend, model, a.cmd, limit=a.limit, retriever=ret)

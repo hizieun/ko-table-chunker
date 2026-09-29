@@ -67,6 +67,63 @@ def test_복합_한글수사():
     assert N("1천2백") == 1200
 
 
+def test_RRF_융합():
+    """순위 융합. 두 검색기가 엇갈릴 때 '둘 다 웬만큼 좋은' 문서가 이겨야 한다."""
+    import numpy as np
+    from evaluate import HybridRRF, Retriever
+
+    class Fake(Retriever):
+        def __init__(self, order): self.order = order
+        def ranks(self, queries, docs): return np.array([self.order] * len(queries))
+
+    docs = [str(i) for i in range(10)]
+    #  0번: A 1등 / B 꼴찌,  9번: B 1등 / A 꼴찌   (한쪽만 확신)
+    #  1번: 양쪽 모두 2등                          (둘 다 웬만큼)
+    # -> 한쪽 확신보다 양쪽 합의가 이겨야 한다
+    a = Fake([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+    b = Fake([9, 1, 8, 7, 6, 5, 4, 3, 2, 0])
+    fused = HybridRRF(a, b).ranks(["q"], docs)[0]
+    assert docs[fused[0]] == "1", [docs[i] for i in fused]
+    # 한쪽 1등짜리 둘은 뒤로 밀린다
+    assert fused.tolist().index(0) > 0 and fused.tolist().index(9) > 0
+
+    # 두 검색기가 같으면 융합해도 순서가 그대로다
+    same = HybridRRF(a, Fake(list(range(10)))).ranks(["q"], docs)[0]
+    assert list(same) == list(range(10)), same
+
+    # 모든 문서가 정확히 한 번씩 나온다 (유실·중복 금지)
+    assert sorted(fused) == list(range(len(docs)))
+
+    # RRF 를 쓰는 이유: 순위가 포화한다. 한쪽에서 500등이어도 다른 쪽 1등이면
+    # 살아남는다. 단순 순위합(Borda)이면 '500' 이 그대로 더해져 뭉개버린다.
+    n, X, Y = 600, 0, 1
+    rest = list(range(2, n))
+    oa = [X] + rest[:49] + [Y] + rest[49:]            # X 0등, Y 50등
+    ob = rest[:50] + [Y] + rest[50:498] + [X] + rest[498:]   # Y 50등, X 499등
+    assert oa.index(X) == 0 and oa.index(Y) == 50
+    assert ob.index(Y) == 50 and ob.index(X) == 499
+    big = HybridRRF(Fake(oa), Fake(ob)).ranks(["q"], [str(i) for i in range(n)])[0]
+    assert big.tolist().index(X) < big.tolist().index(Y), "RRF 가 포화하지 않는다"
+
+
+def test_검색기_조합_구성():
+    """CLI 플래그 -> 검색기 조합. --hybrid 를 밀집 없이 쓰면 막아야 한다."""
+    import argparse
+    from evaluate import CharTfidf, HybridRRF, build_retriever, describe
+
+    mk = lambda **kw: argparse.Namespace(
+        **{"st": None, "hybrid": False, "rerank": None, "rerank_top": 30, **kw})
+
+    assert isinstance(build_retriever(mk()), CharTfidf)
+    assert describe(build_retriever(mk())) == "CharTfidf"
+    try:
+        build_retriever(mk(hybrid=True))          # 밀집 없이 융합 불가
+    except SystemExit:
+        pass
+    else:
+        raise AssertionError("--hybrid 를 --st 없이 허용했다")
+
+
 def test_L4_채점_배선():
     """LLM 없이 L4 경로(검색 -> 프롬프트 -> 채점)가 맞는지 고정한다.
 
@@ -83,8 +140,8 @@ def test_L4_채점_배선():
     L.BACKENDS["_gold"] = lambda p, m, **k: answers[p.split("[질문] ")[1].split("\n")[0]]
     L.BACKENDS["_wrong"] = lambda p, m, **k: "연간 3,300원"
     try:
-        good = L.run([html], "_gold", "", limit=4)
-        bad = L.run([html], "_wrong", "", limit=4)
+        good = L.run([html], "_gold", "", limit=4, verbose=False)
+        bad = L.run([html], "_wrong", "", limit=4, verbose=False)
     finally:
         L.BACKENDS.pop("_gold", None)
         L.BACKENDS.pop("_wrong", None)
