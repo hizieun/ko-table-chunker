@@ -24,8 +24,6 @@ flowchart TD
     G --> H
     H --> I["text → 임베딩"]
     H --> J["context → LLM"]
-    style E fill:#fff4e8,stroke:#d4a373,color:#1f2328
-    style H fill:#eef5fe,stroke:#7aa7d9,color:#1f2328
 ```
 
 ```bash
@@ -284,11 +282,6 @@ flowchart TD
     C -->|"예"| D{"R@1<br/>낮은가?"}
     D -->|"예"| F4["랭킹 문제<br/>하이브리드 → 리랭커"]
     D -->|"아니오"| F5["혼동값을 본다<br/>한 줄에 값이 여럿인가"]
-    style F1 fill:#fff5f5,stroke:#f3c5c5,color:#1f2328
-    style F2 fill:#fff5f5,stroke:#f3c5c5,color:#1f2328
-    style F4 fill:#eef5fe,stroke:#7aa7d9,color:#1f2328
-    style F3 fill:#eef5fe,stroke:#7aa7d9,color:#1f2328
-    style F5 fill:#fff4e8,stroke:#d4a373,color:#1f2328
 ```
 
 `행파괴율` 과 L1 은 **임베더를 바꿔도 값이 변하지 않는다**. 그래서 왼쪽 두 갈래는
