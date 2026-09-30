@@ -13,17 +13,17 @@
 | Word/한글 내보내기 (`MsoNormalTable`) | 태그는 멀쩡하나 `<th>` 가 **하나도 없음**, 인라인 style 폭탄, 표 안에 본문 문단 | 헤더 탐지·행 분류 (→ §2-5) |
 
 ```mermaid
-flowchart LR
-    A["OCR / Word<br/>HTML"] --> B["html5lib<br/>파싱"]
-    B --> C["rowspan·colspan 전개<br/>직사각 그리드"]
-    C --> D["헤더 탐지<br/>행 n_header<br/>열 header_cols"]
-    D --> E{"교차표?"}
-    E -->|"예"| F["셀 단위<br/>언피벗"]
-    E -->|"아니오"| G["행 단위<br/>KV"]
-    F --> H["행 원자적 청킹<br/>경계가 단위를 안 쪼갠다"]
+flowchart TD
+    A["OCR / Word 내보내기 HTML"] --> B["html5lib 파싱<br/>안 닫힌 td·tr 복구"]
+    B --> C["rowspan·colspan 전개<br/>직사각 그리드 + origin 추적"]
+    C --> D["헤더 탐지<br/>행 n_header · 열 header_cols"]
+    D --> E{"행축·열축이<br/>둘 다 계층인가?"}
+    E -->|"예 = 교차표"| F["셀 단위 언피벗<br/>값 셀 1개 = 1단위"]
+    E -->|"아니오 = 목록"| G["행 단위 KV<br/>행 1개 = 1단위"]
+    F --> H["행 원자적 청킹<br/>경계가 단위를 쪼개지 않는다"]
     G --> H
-    H --> I["text<br/>→ 임베딩"]
-    H --> J["context<br/>→ LLM"]
+    H --> I["text → 임베딩"]
+    H --> J["context → LLM"]
     style E fill:#fff4e8,stroke:#d4a373
     style H fill:#eef5fe,stroke:#7aa7d9
 ```
