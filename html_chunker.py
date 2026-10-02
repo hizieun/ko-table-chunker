@@ -453,7 +453,22 @@ def row_units(t: "Table", row: list[Cell], hc: int) -> list[str]:
         prev = cell.origin
         head = " ".join(x for x in (pre, t.labels[i]) if x)
         out.append(f"{head}: {cell.text}" if head else cell.text)
+    if not out and pre:
+        # 값 컬럼이 전부 빈 행. 그냥 두면 행 헤더 텍스트가 통째로 사라진다
+        # (실문서의 '금융위원회 | (빈칸)' 수신처 행이 그렇게 유실됐다).
+        out.append(pre)
     return out
+
+
+def is_data_table(t: "Table") -> bool:
+    """<table> 를 썼다고 다 데이터 표가 아니다.
+
+    실문서(DART 공시 55개 표 중 25개)는 날짜 한 줄, 제목 블록, 단락 배치를
+    1열짜리 표로 감싼다. 그걸 데이터 표로 다루면 '[표] 2026년 10월 01일' 같은
+    청크가 생겨 검색 공간만 오염시킨다. 최소한 2열이고 값이 2개는 있어야 표다.
+    """
+    return bool(t.grid) and len(t.grid[0]) >= 2 and len(t.body) >= 1 \
+        and sum(1 for r in t.body for c in r if c.text) >= 2
 
 
 def is_prose_row(row: list[Cell], min_chars: int = 60) -> bool:
@@ -473,6 +488,11 @@ def _pack_table(t: Table, tid: int, heading: str, max_chars: int) -> list[Chunk]
     """행 원자적 청킹: 헤더 문맥을 매 청크에 반복하고 행은 절대 쪼개지 않는다."""
     if not t.body:
         return []
+    if not is_data_table(t):
+        # 레이아웃·제목용 표. 본문으로 흘려보낸다 (텍스트는 잃지 않는다).
+        txt = " ".join(c.text for r in t.grid for c in r if c.text)
+        return [Chunk(text=p, context=p, kind="text", heading=heading)
+                for p in _pack_text(txt, max_chars)]
     title = " / ".join(x for x in (heading, t.caption) if x)
     prefix = f"[표] {title}" if title else "[표]"
     cols = ", ".join(l for l in t.labels if l)
@@ -547,6 +567,8 @@ def invariants(html: str, chunks: list[Chunk] | None = None, **kw) -> dict:
     # 행 원자성: 모든 body 행의 KV 가 정확히 한 청크 안에 통째로 들어있는가
     atomic = True
     for tid, t in enumerate(tables):
+        if not is_data_table(t):
+            continue        # 본문으로 흘려보낸 표. 행 KV 로 존재하지 않는 게 정상
         owned = [c for c in chunks if c.table_id == tid]
         hc = header_cols(t) if is_crosstab(t) else 0
         for r in t.body:

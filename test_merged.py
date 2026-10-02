@@ -295,6 +295,37 @@ def test_주석은_색인되지_않는다():
     assert "부문별 실적" in blob and "3,300원" in blob
 
 
+def test_레이아웃_표는_본문으로():
+    """<table> 를 썼다고 다 데이터 표가 아니다. 실문서(DART)는 날짜 한 줄,
+    제목 블록을 1열 표로 감싼다 — 55개 표 중 25개가 그랬다."""
+    from html_chunker import is_data_table
+    one = T("<table><tr><td>2026년 10월 01일</td></tr></table>")
+    assert not is_data_table(one)
+    real = T("""<table><tr><td>구분</td><td>금액</td></tr>
+                       <tr><td>국내주식</td><td>3,300원</td></tr></table>""")
+    assert is_data_table(real)
+
+    html = """<body><table><tr><td>2026년 10월 01일</td></tr></table>
+      <table><tr><td>구분</td><td>금액</td></tr>
+             <tr><td>국내주식</td><td>3,300원</td></tr></table></body>"""
+    ch = parse(html)
+    assert not any("2026년 10월 01일" in c.text for c in ch if c.kind == "table")
+    assert any("2026년 10월 01일" in c.text for c in ch if c.kind == "text")
+    assert any("3,300원" in c.text for c in ch if c.kind == "table")
+
+
+def test_값컬럼이_빈_행도_텍스트를_잃지_않는다():
+    """셀 단위 모드에서 값 칸이 전부 비면 행 헤더까지 사라졌다.
+    실문서의 '금융위원회 | (빈칸)' 수신처 행이 그렇게 유실됐다."""
+    html = """<table>
+      <tr><td>금융위원회</td><td></td></tr>
+      <tr><td>한국거래소 귀중</td><td>2026년 09월 28일</td></tr>
+    </table>"""
+    blob = "\n".join(c.text for c in parse(html))
+    assert "금융위원회" in blob, blob
+    assert "한국거래소 귀중" in blob and "2026년 09월 28일" in blob
+
+
 def test_교차표_판정():
     """행축·열축이 둘 다 계층이면 교차표. 행이 레코드인 목록과 구분해야 한다."""
     from html_chunker import header_cols, is_crosstab, is_value
