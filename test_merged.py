@@ -281,6 +281,20 @@ def test_전폭_배너행은_그룹헤더가_아니다():
     assert all(l.startswith("표 제목 배너 > ") for l in t.labels), t.labels
 
 
+def test_주석은_색인되지_않는다():
+    """Comment 는 NavigableString 의 하위 클래스라 isinstance 로 받으면 본문이 된다.
+    실문서 주석에는 편집 메모·이전 버전 내용·내부 코멘트가 들어있다."""
+    html = """<html><body>
+      <!-- 내부메모: 이 수치는 2024년 감사 전 잠정치임. 공개 금지 -->
+      <p>부문별 실적은 아래와 같습니다.</p>
+      <table><tr><td>구분</td><td>금액</td></tr>
+             <tr><td>국내주식</td><td>3,300원</td></tr></table>
+    </body></html>"""
+    blob = "\n".join(c.text for c in parse(html))
+    assert "내부메모" not in blob and "공개 금지" not in blob, blob
+    assert "부문별 실적" in blob and "3,300원" in blob
+
+
 def test_교차표_판정():
     """행축·열축이 둘 다 계층이면 교차표. 행이 레코드인 목록과 구분해야 한다."""
     from html_chunker import header_cols, is_crosstab, is_value

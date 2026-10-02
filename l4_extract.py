@@ -115,11 +115,24 @@ def _bedrock(prompt: str, model: str) -> str:
     return json.loads(r["body"].read())["content"][0]["text"].strip()
 
 
-def _cmd(prompt: str, model: str, cmd: str = "") -> str:
-    """임의 CLI 를 판정기로. 프롬프트는 stdin 으로 넣는다."""
-    p = subprocess.run(cmd, shell=True, input=prompt, capture_output=True,
-                       text=True, timeout=120)
-    return p.stdout.strip()
+def _cmd(prompt: str, model: str, cmd: str = "", tries: int = 3) -> str:
+    """임의 CLI 를 판정기로. 프롬프트는 stdin 으로 넣는다.
+
+    CLI 판정기는 프로세스를 새로 띄우므로 가끔 느리다. 재시도 없이 쓰면
+    타임아웃이 **오답으로 집계되어** 전략 간 차이로 둔갑한다 — 실제로
+    언피벗 A/B 에서 차이의 절반이 타임아웃이었다.
+    """
+    last = None
+    for i in range(tries):
+        try:
+            r = subprocess.run(cmd, shell=True, input=prompt, capture_output=True,
+                               text=True, timeout=120 * (i + 1))
+            if r.stdout.strip():
+                return r.stdout.strip()
+            last = RuntimeError(f"빈 응답: {r.stderr.strip()[:80]}")
+        except subprocess.TimeoutExpired as e:
+            last = e
+    raise last
 
 
 BACKENDS = {"anthropic": _anthropic, "bedrock": _bedrock, "cmd": _cmd}

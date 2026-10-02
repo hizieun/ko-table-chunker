@@ -319,7 +319,10 @@ class _Walk:
 
 def _walk(node, w: _Walk):
     for child in getattr(node, "children", []):
-        if isinstance(child, NavigableString):
+        # Comment·Doctype·CData 는 NavigableString 의 하위 클래스다. isinstance 로
+        # 받으면 **HTML 주석이 본문으로 색인된다** — 실문서 주석에는 편집 메모,
+        # 이전 버전 내용, 내부 코멘트가 들어있다. 정확한 타입만 본다.
+        if type(child) is NavigableString:
             t = clean(str(child))
             if t:
                 w.blocks.append(("text", t, w.heading()))
