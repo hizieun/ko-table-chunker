@@ -28,9 +28,9 @@ flowchart TD
 
 ```bash
 python3 html_chunker.py           # 파서 자체 검증 (불변식 + 깨진 마크업 내성)
-python3 test_merged.py            # 병합 셀·헤더·교차표 테스트 (좌표 단위, 22개)
+python3 test_merged.py            # 병합 셀·헤더·교차표 테스트 (좌표 단위, 25개)
 python3 evaluate.py               # 3층 검증 리포트 (합성 코퍼스, 오프라인)
-python3 evaluate.py fixtures/*.html   # 한국어 실문서형 픽스처 5종
+python3 evaluate.py fixtures/*.html   # 한국어 실문서형 픽스처 6종
 python3 test_num.py               # 한국어 수량 정규화 + L4 채점 배선 (9개)
 python3 l4_extract.py fixtures/*.html --backend anthropic   # L4 (LLM 필요)
 
@@ -312,6 +312,7 @@ flowchart TD
 | `03_ocr_깨진마크업.html` | 닫는 태그 누락, 인라인 style 폭탄, `&nbsp;`, 빈 `<tr>`, `rowspan="0"`, `colspan="9"` 초과, 중첩 표, 레이아웃용 표, `<p>` 안의 `<table>` |
 | `04_유니코드함정.html` | NFD 자모 분리 셀이 NFC 본문과 섞임, 전각 숫자·기호, 제로폭 공백, NBSP |
 | `05_워드내보내기.html` | **`MsoNormalTable`** — `<th>` 0개, `mso-*` 스타일, `<o:p>`, 모든 텍스트가 `<p><span>` 에 감싸임, 2단 헤더 + 좌측 2단 분류, 표 맨 아래 전폭 안내문 행 |
+| `06_워드_고급.html` | Word 가 실제로 내보내는 구문 총집합 — 조건부 주석(`<![if gte mso 9]>`), VML 도형, 스마트태그(`<st1:*>`), `<![if !supportLists]>` 목록 마커, `mso-yfti-*` 행 속성, `mso-spacerun`, 중첩 `<span><font>`, **폭 0 spacer 열** |
 
 03·04·05는 **대응 로직이 없으면 반드시 실패하도록** 만들었다. 실제로 03이 파싱 백엔드를,
 04가 NFKC 전환을, 05가 `<th>` 없는 헤더 탐지와 안내문 행 분리를 잡아냈다.
@@ -348,6 +349,12 @@ python3 evaluate.py --l1 public/*.html
 
 DART 공시는 업무 문서 그 자체다: 병합 표, 다단 헤더, 레이아웃용 표, 깨진 마크업.
 Word 내보내기와는 또 다른 방언(HTML 4.01, 대문자 태그)이라 커버리지가 넓어진다.
+
+**Word 계열 공개 소스는 찾지 못했다.** DART(16건), 중기부·서울시·국세청·국토부·
+법제처·금감원 상세 페이지를 찍어봤는데 `mso-`/`MsoNormalTable` 이 **단 한 건도** 없었다.
+한국 공공기관은 Word·HWP 를 **첨부파일(.hwpx/.pdf)로 붙이고 본문은 깔끔한 CMS HTML**
+로 서빙한다. 그래서 Word 방언은 공개 수집 대신 `fixtures/06` + 생성기로 덮는다 —
+Word 의 HTML 출력은 형식이 잘 문서화돼 있어 재현이 가능하다.
 
 **12문서 / 표 531개로 돌리자마자 파서 버그 2건이 나왔다.** 합성 코퍼스 40문서가
 못 잡은 것들이다.
@@ -412,7 +419,7 @@ Word 내보내기와는 또 다른 방언(HTML 4.01, 대문자 태그)이라 커
 > `Comment` 가 `NavigableString` 의 하위 클래스라 `isinstance` 로 받으면 통과한다.
 > 실문서 주석에는 편집 메모·이전 버전 내용·내부 코멘트가 들어있다.
 
-### `test_merged.py` — 병합 셀·헤더·교차표 (22개)
+### `test_merged.py` — 병합 셀·헤더·교차표 (25개)
 
 그리드 **좌표 단위**로 검증한다. 청크 문자열만 보면 점유 맵의 off-by-one 이
 "대충 맞아 보이는" 결과로 숨는다.

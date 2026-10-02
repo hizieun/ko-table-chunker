@@ -326,6 +326,29 @@ def test_값컬럼이_빈_행도_텍스트를_잃지_않는다():
     assert "한국거래소 귀중" in blob and "2026년 09월 28일" in blob
 
 
+def test_Word_spacer열이_판정을_깨지_않는다():
+    """Word 는 표 들여쓰기용으로 폭 0 짜리 빈 열을 좌우에 붙인다.
+    그걸 세면 '한 셀이 전폭을 덮는다'(안내문 행) 판정이 깨져,
+    안내문이 데이터 행으로 남아 라벨과 함께 중복 출력된다."""
+    from html_chunker import is_prose_row
+    note = ("※ 수수료는 부가세 별도이며, 채널 전환 시 기존 수수료는 일할 정산 후 "
+            "환급한다. 자세한 사항은 고객지원팀으로 문의하기 바란다.")
+    html = f"""<table>
+      <tr><td style="border:none"></td><td>구분</td><td>개인</td><td>법인</td>
+          <td style="border:none"></td></tr>
+      <tr><td style="border:none"></td><td>수수료</td><td>2,200원</td><td>44,000원</td>
+          <td style="border:none"></td></tr>
+      <tr><td style="border:none"></td><td colspan="3">{note}</td>
+          <td style="border:none"></td></tr>
+    </table>"""
+    t = T(html)
+    assert is_prose_row(t.body[-1]), "spacer 열 때문에 안내문 행을 못 찾았다"
+    assert not is_prose_row(t.body[0])
+    ch = parse(html)
+    assert any(note[:18] in c.text for c in ch if c.kind == "text"), "본문으로 안 빠짐"
+    assert not any(note[:18] in c.text for c in ch if c.kind == "table"), "표에 남음"
+
+
 def test_교차표_판정():
     """행축·열축이 둘 다 계층이면 교차표. 행이 레코드인 목록과 구분해야 한다."""
     from html_chunker import header_cols, is_crosstab, is_value

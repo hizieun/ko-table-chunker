@@ -46,8 +46,21 @@ def cell(txt, *, th=False, rs=1, cs=1, hdr=False, w=None, bold=False):
             f'<p class="MsoNormal">{inner}<o:p></o:p></p></{tag}>')
 
 
-def table(rows_html, caption=None, width=735):
+SPACER = '<td width="4" style="width:.05in;border:none"><p class=MsoNormal><o:p>&nbsp;</o:p></p></td>'
+
+
+def table(rows_html, caption=None, width=735, spacer=False):
+    """spacer=True 면 Word 의 표 들여쓰기(폭 0 빈 열)를 좌우에 붙인다.
+
+    실제 Word 산출물의 흔한 형태이고, 파서의 '전폭 안내문 행' 판정을 깨뜨린 적이
+    있어 생성기에도 넣는다.
+    """
     cap = f"<caption>{caption}</caption>" if caption else ""
+    if spacer:
+        rows_html = [r.replace("<tr", "<tr", 1)
+                      .replace(">", f">{SPACER}", 1) + SPACER if r.startswith("<tr")
+                     else r for r in rows_html]
+        rows_html = [r.replace("</tr>" + SPACER, SPACER + "</tr>") for r in rows_html]
     return (f'<table width="{width}" class="MsoNormalTable" border="1" cellspacing="0" '
             f'cellpadding="0" style="border-collapse: collapse;">{cap}<tbody>'
             + "".join(rows_html) + "</tbody></table>")
@@ -81,7 +94,8 @@ def t_crosstab(r):
         rows.append("<tr>" + cell("이용범위", hdr=True, bold=True)
                     + cell(f"전 {r.choice(['제휴기관', '계열사', '가맹점'])}/단체", cs=2)
                     + cell(f"전 {r.choice(['은행', '증권사', '보험사'])}, 전자정부", cs=2) + "</tr>")
-    return table(rows, f"인증서 종류별 수수료 ({r.choice(['부가세 포함', '연간 기준'])})")
+    return table(rows, f"인증서 종류별 수수료 ({r.choice(['부가세 포함', '연간 기준'])})",
+                 spacer=r.random() < 0.35)
 
 
 def t_period(r):
@@ -96,7 +110,7 @@ def t_period(r):
                     + "".join(cell(f"{r.randint(100, 9000):,}") for _ in range(4)) + "</tr>")
         rows.append("<tr>" + cell("비중", hdr=True)
                     + "".join(cell(f"{r.uniform(0.5, 40):.1f}%") for _ in range(4)) + "</tr>")
-    return table(rows, f"{y}년 부문별 손익 (단위: 백만원)")
+    return table(rows, f"{y}년 부문별 손익 (단위: 백만원)", spacer=r.random() < 0.35)
 
 
 def t_records(r):

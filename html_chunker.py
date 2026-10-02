@@ -478,10 +478,12 @@ def is_prose_row(row: list[Cell], min_chars: int = 60) -> bool:
     처리 안내를 한 칸짜리 행으로 붙인다. 이걸 데이터 행으로 다루면
     '구분: ※ 요금제 선택을...' 같은 쓰레기 KV 가 나온다.
     """
-    if len(row) < 2:
+    cells = [c for c in row if c.text]
+    if len(row) < 2 or not cells:
         return False
-    origins = {c.origin for c in row}
-    return len(origins) == 1 and origins != {(-1, -1)} and len(row[0].text) >= min_chars
+    # 빈 칸은 세지 않는다. Word 는 표 들여쓰기용으로 폭 0 짜리 spacer 열을
+    # 좌우에 붙이는데, 그걸 세면 '한 셀이 전폭을 덮는다' 판정이 깨진다.
+    return len({c.origin for c in cells}) == 1 and len(cells[0].text) >= min_chars
 
 
 def _pack_table(t: Table, tid: int, heading: str, max_chars: int) -> list[Chunk]:
@@ -521,7 +523,8 @@ def _pack_table(t: Table, tid: int, heading: str, max_chars: int) -> list[Chunk]
             if cur:
                 emit()
                 cur, rows_in, used = [], [], 0
-            for piece in _pack_text(row[0].text, max_chars):
+            note = next(c.text for c in row if c.text)
+            for piece in _pack_text(note, max_chars):
                 body = f"{prefix}\n{piece}" if title else piece
                 out.append(Chunk(text=body, context=body, kind="text",
                                  heading=heading, table_id=tid, row_span=(i, i + 1)))
