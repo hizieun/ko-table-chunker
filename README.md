@@ -39,6 +39,9 @@ python3 anonymize.py --selfcheck               # 쌍둥이가 원본과 같은�
 python3 make_corpus.py --n 40         # 실파일급 합성 코퍼스 생성 (corpus/)
 python3 evaluate.py corpus/*.htm      # 40문서 / 표 86개 규모로 측정
 
+# 반출 불가 환경: L1 만, 텍스트 없는 요약만 (네트워크·LLM·정답 라벨 불필요)
+python3 evaluate.py --l1 실파일/*.htm
+
 # 검색층 (파서와 독립. 조합해서 쓴다)
 python3 evaluate.py corpus/*.htm --st jhgan/ko-sroberta-multitask --hybrid
 python3 evaluate.py corpus/*.htm --st BAAI/bge-m3 --hybrid \
@@ -332,6 +335,29 @@ flowchart TD
 
 세 번째는 변이 테스트가 **잡지 못해서** 발견했다 — 테스트가 안 깨지는 방어 코드를
 살펴봤더니 없는 게 나았다. 못 깨지는 코드는 지우는 게 맞다.
+
+### 실파일을 반출할 수 없을 때 — 세 단계
+
+보안 등급에 따라 고르면 된다. 아래로 갈수록 반출량이 적고 정보량도 적다.
+
+| 방법 | 반출물 | 내가 얻는 것 |
+|---|---|---|
+| `anonymize.py --out twin/` | 구조적 쌍둥이 파일 | 거의 전부. 버그를 직접 재현 |
+| `anonymize.py --report` | 구조 통계 JSON | 표 모양·병합·헤더 분포 |
+| **`evaluate.py --l1`** | **텍스트 0인 요약 15줄** | 파서가 깨지는지 여부 |
+
+`--l1` 은 **네트워크·LLM·임베딩 모델·정답 라벨이 전혀 필요 없다.** 출력에 문서
+내용이 한 글자도 들어가지 않는다 (L2/L3 는 질의를 생성하므로 실문서 내용이 섞여
+일부러 뺐다). 실패한 파일명은 '로컬 확인용' 으로 따로 구분해 찍는다.
+
+```
+  rectangular        40/40  ✓
+  cell_conservation  40/40  ✓
+  row_atomic         40/40  ✓
+  text_coverage      평균 1.0000 / 최저 1.0000  ✓
+  헤더 판정          {'헤더행2/헤더열2/교차표': 42, '헤더행1/헤더열3/목록': 21, …}
+  병합 분포          {'rs1×cs1': 3850, 'rs1×cs2': 197, 'rs2×cs1': 170, …}
+```
 
 ### `anonymize.py` — 실파일을 못 꺼낼 때
 

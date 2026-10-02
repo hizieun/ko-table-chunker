@@ -389,6 +389,85 @@ def run(docs: list[str], fn, max_chars: int) -> list[Chunk]:
     return out
 
 
+def l1_only(paths: list[str], max_chars: int = 900) -> None:
+    """L1 만 돌리고 **텍스트가 한 글자도 없는** 요약을 낸다.
+
+    보안상 문서를 반출할 수 없는 환경에서, 사내에서 돌린 뒤 요약만 공유하기 위한
+    모드다. L2/L3 는 질의를 생성하므로 출력에 실문서 내용이 섞인다 — 그래서 뺀다.
+    네트워크·LLM·임베딩 모델·정답 라벨 모두 필요 없다.
+    """
+    import collections
+    import pathlib
+    from html_chunker import build_table, header_cols, is_crosstab, _int, _own
+
+    n = len(paths)
+    agg = collections.Counter()
+    cov, worst, fails = [], ("", 1.0), collections.defaultdict(list)
+    spans, hdr, shapes = collections.Counter(), collections.Counter(), []
+
+    for p in paths:
+        html = pathlib.Path(p).read_text(encoding="utf-8", errors="replace")
+        inv = invariants(html, max_chars=max_chars)
+        for k in ("rectangular", "cell_conservation", "row_atomic"):
+            agg[k] += int(inv[k])
+            if not inv[k]:
+                fails[k].append(p)
+        agg["n_chunks"] += inv["n_chunks"]
+        agg["n_tables"] += inv["n_tables"]
+        agg["oversize"] += inv["oversize_chunks"]
+        cov.append(inv["text_coverage"])
+        if inv["text_coverage"] < worst[1]:
+            worst = (p, inv["text_coverage"])
+        if inv["text_coverage"] <= 0.98:
+            fails["text_coverage"].append(f"{p} ({inv['text_coverage']:.4f}, "
+                                          f"유실 {len(inv['missing_tokens'])}+)")
+
+        soup = BeautifulSoup(html, BACKEND)
+        for tag in soup.find_all("table"):
+            for c in tag.find_all(["td", "th"]):
+                spans[f"rs{max(1,_int(c.get('rowspan'),1))}×cs"
+                      f"{max(1,_int(c.get('colspan'),1))}"] += 1
+            if tag.find_parent("table") is None:
+                t = build_table(tag)
+                if t.grid:
+                    shapes.append((len(t.grid), len(t.grid[0])))
+                    hdr[f"헤더행{t.n_header}/헤더열{header_cols(t)}"
+                        f"/{'교차표' if is_crosstab(t) else '목록'}"] += 1
+        agg["mso"] += int("MsoNormalTable" in html)
+        agg["th"] += int(bool(soup.find("th")))
+        agg["nested"] += sum(1 for t in soup.find_all("table") if t.find_parent("table"))
+
+    ok = lambda c: "✓" if c == n else "✗ FAIL"
+    print("=" * 62)
+    print("  보내도 되는 요약 — 문서 내용이 한 글자도 들어있지 않습니다")
+    print("=" * 62)
+    print(f"  문서                {n}")
+    print(f"  표(최상위/중첩)      {agg['n_tables']} / {agg['nested']}")
+    print(f"  청크                {agg['n_chunks']}  (oversize {agg['oversize']})")
+    print(f"  Word 내보내기        {agg['mso']}/{n}      <th> 있는 문서  {agg['th']}/{n}")
+    print()
+    for k in ("rectangular", "cell_conservation", "row_atomic"):
+        print(f"  {k:<18} {agg[k]}/{n}  {ok(agg[k])}")
+    avg = sum(cov) / max(1, n)
+    print(f"  {'text_coverage':<18} 평균 {avg:.4f} / 최저 {worst[1]:.4f}  "
+          f"{'✓' if avg > 0.98 and worst[1] > 0.98 else '✗ FAIL'}")
+    print()
+    print(f"  표 모양 상위       {collections.Counter(shapes).most_common(6)}")
+    print(f"  헤더 판정          {dict(hdr.most_common(8))}")
+    print(f"  병합 분포          {dict(spans.most_common(8))}")
+    print("=" * 62)
+
+    if any(fails.values()):
+        print("\n--- 아래는 로컬 확인용입니다. 파일명이 들어있으니 공유 전 확인하세요 ---")
+        for k, v in fails.items():
+            for f in v[:10]:
+                print(f"  ✗ {k}: {f}")
+            if len(v) > 10:
+                print(f"     … 외 {len(v)-10}건")
+    else:
+        print("\n모든 불변식 통과 — 이 문서들에서 파서가 데이터를 잃거나 깨뜨리지 않았습니다.")
+
+
 def report(docs: list[str], emb, max_chars: int = 900):
     print(f"\n== L1 구조 불변식 (라벨 불필요, 문서 {len(docs)}개) ==")
     agg = {}
@@ -480,7 +559,15 @@ if __name__ == "__main__":
                          "(예: dragonkue/bge-reranker-v2m3-ko)")
     ap.add_argument("--rerank-top", type=int, default=30)
     ap.add_argument("--max-chars", type=int, default=900)
+    ap.add_argument("--l1", action="store_true",
+                    help="L1 만. 텍스트 없는 요약만 출력 (네트워크·LLM 불필요)")
     a = ap.parse_args()
+
+    if a.l1:
+        if not a.paths:
+            ap.error("--l1 은 파일 경로가 필요하다")
+        l1_only(a.paths, a.max_chars)
+        sys.exit()
 
     docs = [open(p, encoding="utf-8").read() for p in a.paths] if a.paths else corpus()
     ret = build_retriever(a)

@@ -368,6 +368,13 @@ def test_헤더없는_2열표():
       <tr><td>구비서류</td><td>신분증, 거래인감, 법인의 경우 사업자등록증 사본 각 1부</td></tr>
     </table>""")
     assert t.n_header == 0, f"헤더 {t.n_header}행 — 첫 레코드를 헤더로 먹었다"
+    # 첫 행이 짧아도 뒤집히면 안 된다 — 길이 기준만 쓰면 운에 좌우된다
+    t2 = T("""<table>
+      <tr><td>수수료</td><td>1,700원</td></tr>
+      <tr><td>구비서류</td><td>신분증, 거래인감, 사업자등록증 사본 각 1부</td></tr>
+    </table>""")
+    assert t2.n_header == 0, f"헤더 {t2.n_header}행 — 첫 행이 짧으면 판정이 뒤집힌다"
+    assert row_units(t2, t2.body[0], 1) == ["수수료: 1,700원"]
     assert header_cols(t) == 1 and is_crosstab(t)
     units = row_units(t, t.body[0], 1)
     assert units == ["신청방법: 영업점 방문 또는 온라인 신청서 제출 후 본인확인 절차를 거칩니다."], units
