@@ -168,7 +168,29 @@ def _header_rows(grid: list[list[Cell]]) -> int:
             n += 1
         if not headerless:
             n = max(n, 1)
+            # 헤더 행의 colspan 은 **아래 하위 헤더를 묶으려고** 존재한다.
+            # 그러니 가로 병합이 있는 헤더 행 바로 밑도 헤더다. 이게 없으면
+            # '2025년(colspan=2) / 상반기·하반기' 처럼 상단에 연도가 든 표에서
+            # 숫자 규칙이 먼저 걸려 1행으로 끊기고, 상반기·하반기가 데이터로 샌다.
+            while n < 3 and n < len(grid) - 1 and _has_hmerge(grid[n - 1], n - 1):
+                n += 1
     return min(n, max(0, len(grid) - 1))
+
+
+def _has_hmerge(row: list[Cell], r: int) -> bool:
+    """**이 행에서 시작한** 가로 병합이 있는가.
+
+    rowspan 으로 내려온 셀은 아래 행에서도 이웃과 origin 이 같아 가짜 신호를
+    만든다 (구분 rowspan=2 colspan=2 가 2행째에도 두 칸을 덮는다). origin 의
+    행 번호로 걸러야 한다.
+    """
+    # 한 칸이 행 전체를 덮으면 묶을 하위 컬럼이 없다 — 그룹 헤더가 아니라
+    # 전폭 배너·주석 행이다. 최소 두 덩어리로 나뉘어야 '묶는' 것이다.
+    if len({c.origin for c in row if c.text}) < 2:
+        return False
+    return any(row[i].text and row[i].origin[0] == r
+               and row[i].origin == row[i + 1].origin
+               for i in range(len(row) - 1))
 
 
 _CODE = re.compile(r"^[A-Za-z]{1,3}[-_]?\d+$")          # A0000, KR-123
@@ -332,6 +354,17 @@ def parse(html: str, max_chars: int = 900, backend: str = BACKEND) -> list[Chunk
     """
     soup = BeautifulSoup(html, backend)
     w = _Walk()
+    # 문서 제목을 섹션 경로의 0단으로 깐다.
+    #
+    # Word/한글·CMS 내보내기는 제목을 <h1> 이 아니라 시각적 스타일로만 표현한다
+    # (<div><span style="font-size:18px;font-weight:700">). 그러면 섹션 경로가
+    # 비어 **청크에 문서 식별자가 하나도 안 들어간다** — 문서가 수십 개면 서로
+    # 구분되지 않아 교차 검색이 무너진다. <title> 은 CMS 가 거의 항상 채운다.
+    #
+    # ponytail: 스타일로만 표현된 본문 소제목은 여전히 못 잡는다. 필요해지면
+    # font-size·font-weight 휴리스틱을 더할 것.
+    if soup.title and (t := clean(soup.title.get_text(" ", strip=True))):
+        w.trail[0] = t
     _walk(soup.body or soup, w)
 
     chunks: list[Chunk] = []

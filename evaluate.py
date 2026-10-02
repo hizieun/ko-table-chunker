@@ -184,6 +184,11 @@ def gen_queries(html: str, per_table: int = 6, seed: int = 0) -> list[Query]:
     """
     rng = random.Random(seed)
     soup = BeautifulSoup(html, BACKEND)
+    # 문서를 특정하는 말이 질의에 없으면 답이 불가능하다. 실제 코퍼스는 비슷한 표를
+    # 문서마다 반복하므로(같은 caption, 같은 기관명, 다른 숫자) caption 만으로는
+    # 모자란다. 제목을 scope 로 쓴다 — 실제 사용자도 "가온증권의 ..." 라고 묻는다.
+    head = soup.find(["h1", "h2"]) or soup.title
+    doc_title = clean(head.get_text(" ", strip=True)) if head else ""
     out: list[Query] = []
     for tag in soup.find_all("table"):
         if tag.find_parent("table") is not None:
@@ -207,7 +212,7 @@ def gen_queries(html: str, per_table: int = 6, seed: int = 0) -> list[Query]:
                 continue
             i = rng.choice(tgt)
             keys = [row[k].text for k in key_is]
-            scope = t.caption or "문서"
+            scope = " ".join(x for x in (doc_title, t.caption) if x) or "문서"
             cands.append(Query(
                 q=f"{scope}에서 {' '.join(keys)} 의 "
                   f"{t.labels[i].replace(' > ', ' ')}은 얼마인가?",

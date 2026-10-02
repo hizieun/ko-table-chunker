@@ -218,6 +218,69 @@ def test_표안의_안내문행():
     assert any("구분: 표준" in c.text for c in tbl), "정상 데이터 행까지 사라졌다"
 
 
+def test_상단헤더에_연도가_있어도_2단을_잡는다():
+    """'2025년(colspan=2) / 상반기·하반기' — 한국 표의 기본형.
+    숫자 규칙만 쓰면 1행에서 끊겨 상반기·하반기가 데이터로 샌다.
+    헤더의 colspan 은 아래 하위 헤더를 묶으려고 존재한다는 성질을 쓴다."""
+    t = T("""<table>
+      <tr><td rowspan="2" colspan="2">사업부문</td><td colspan="2">2025년</td>
+          <td colspan="2">2024년</td></tr>
+      <tr><td>상반기</td><td>하반기</td><td>상반기</td><td>하반기</td></tr>
+      <tr><td rowspan="2">CMA</td><td>수익</td><td>8,368</td><td>2,381</td>
+          <td>4,717</td><td>2,389</td></tr>
+      <tr><td>비중</td><td>30.4%</td><td>24.9%</td><td>10.4%</td><td>11.1%</td></tr>
+    </table>""")
+    assert t.n_header == 2, f"헤더 {t.n_header}행 — 상반기·하반기가 데이터로 샜다"
+    assert t.labels[2:] == ["2025년 > 상반기", "2025년 > 하반기",
+                            "2024년 > 상반기", "2024년 > 하반기"], t.labels
+    assert "CMA 수익 2025년 > 상반기: 8,368" in row_units(t, t.body[0], 2)
+
+
+def test_rowspan이_가짜_가로병합을_만들지_않는다():
+    """rowspan 으로 내려온 셀은 아래 행에서도 이웃과 origin 이 같다.
+    이걸 가로 병합으로 세면 헤더가 한 행 더 먹어 첫 데이터 행이 라벨이 된다."""
+    from html_chunker import _has_hmerge
+    t = T("""<table>
+      <tr><td rowspan="2" colspan="2">구분</td><td colspan="2">가온</td></tr>
+      <tr><td>개인</td><td>법인</td></tr>
+      <tr><td>표준</td><td>이용료</td><td>3,300원</td><td>88,000원</td></tr>
+    </table>""")
+    assert _has_hmerge(t.grid[0], 0)        # 0행: 구분·가온 둘 다 가로 병합
+    assert not _has_hmerge(t.grid[1], 1)    # 1행: 구분이 덮고 있지만 0행 것이다
+    assert t.n_header == 2, t.n_header
+
+
+def test_제목이_h1이_아니어도_청크에_들어간다():
+    """Word·CMS 내보내기는 제목을 <h1> 이 아니라 스타일로만 표현한다.
+    섹션 경로가 비면 청크에 문서 식별자가 없어 문서 간 검색이 무너진다."""
+    html = """<html><head><title>가온증권 업무안내 CONTS0039</title></head><body>
+      <div><span style="font-size:18px;font-weight:700">가온증권 업무안내</span></div>
+      <table><tr><td>구분</td><td>수수료</td></tr>
+             <tr><td>국내주식</td><td>3,300원</td></tr></table>
+    </body></html>"""
+    tbl = [c for c in parse(html) if c.kind == "table"]
+    assert tbl and "가온증권 업무안내 CONTS0039" in tbl[0].text, tbl[0].text if tbl else "표 없음"
+
+
+def test_전폭_배너행은_그룹헤더가_아니다():
+    """한 칸이 행 전체를 덮으면 묶을 하위 컬럼이 없다. colspan 이 있다고
+    무조건 아래 행까지 헤더로 먹으면 데이터가 라벨이 된다."""
+    from html_chunker import _has_hmerge
+    t = T("""<table>
+      <tr><td colspan="3">표 제목 배너</td></tr>
+      <tr><td>구분</td><td>개인</td><td>법인</td></tr>
+      <tr><td>수수료</td><td>3,300원</td><td>88,000원</td></tr>
+    </table>""")
+    assert not _has_hmerge(t.grid[0], 0), "전폭 한 칸을 그룹 헤더로 봤다"
+    # 값이 올바른 컬럼에 붙는다 — 한 칸 밀리면 3,300원이 '법인' 이 된다
+    kv = row_kv(t.labels, t.body[0])
+    assert "개인: 3,300원" in kv and "법인: 88,000원" in kv, kv
+    # ponytail: 배너가 모든 라벨에 접두로 붙는다('표 제목 배너 > 개인').
+    # 값 매핑은 맞고 문서 문맥이 되기도 해서 그냥 둔다. 토큰이 아까워지면
+    # 전폭 선행 행을 caption 으로 승격시킬 것.
+    assert all(l.startswith("표 제목 배너 > ") for l in t.labels), t.labels
+
+
 def test_교차표_판정():
     """행축·열축이 둘 다 계층이면 교차표. 행이 레코드인 목록과 구분해야 한다."""
     from html_chunker import header_cols, is_crosstab, is_value
